@@ -31,6 +31,19 @@ const title = await win.evaluate<string>("document.title");
 await Bun.write("shot.png", await win.screenshot());
 ```
 
+Serve your frontend from Bun itself — the custom-protocol answer:
+
+```ts
+import { createWindow, serveApp } from "bun-webview2";
+
+const served = serveApp((req) =>
+  req.url.endsWith("/api/hello")
+    ? Response.json({ hello: "world" })
+    : new Response("<h1>My App</h1>", { headers: { "Content-Type": "text/html" } }),
+);
+await createWindow({ url: served.url });
+```
+
 Run it with `bun run`. Close the window (or call `win.close()`) and the process exits.
 
 ## How it works
@@ -84,6 +97,8 @@ Related, and also handled for you: on a never-navigated webview target, CDP comm
 | `evaluate<T>(expression)` | Evaluate an expression in the page; promises awaited; result JSON round-tripped |
 | `expose(name, fn)` | Expose a Bun function to the page as `await window.bwv2.call(name, ...args)` |
 | `screenshot({ format, quality })` | Capture the viewport as a PNG/JPEG `Blob` |
+| `on(event, handler)` | Native window events, typed: `move`, `resize`, `focus`, `blur`, `key-down`, `key-up`, `mouse-*`, `scroll`, `file-drop` (drag & drop), `file-hover`, `theme-changed` |
+| `cdp` | The live CDP connection — escape hatch to the full DevTools protocol (Network, DOM, Input, Emulation, …) |
 | `url` | Current page URL (tracked across navigations, including page-initiated ones) |
 | `closed` / `onClosed(cb)` / `close()` | Lifecycle |
 | `setTitle`, `setSize`, `setPosition`, `setDecorations`, `setAlwaysOnTop`, `focus`, `minimize`, `maximize` | Native window controls |

@@ -51,6 +51,27 @@ export interface ScreenshotFormat {
   readonly quality?: number;
 }
 
+/** Typed payloads for `win.on(...)`, mirroring tao's window events. */
+export interface WindowEventPayloads {
+  move: { readonly x: number; readonly y: number };
+  resize: { readonly width: number; readonly height: number };
+  focus: Record<string, never>;
+  blur: Record<string, never>;
+  "key-down": { readonly key?: string; readonly code?: string; readonly modifiers?: number; readonly isRepeat?: boolean };
+  "key-up": { readonly key?: string; readonly code?: string; readonly modifiers?: number };
+  "mouse-enter": { readonly x: number; readonly y: number; readonly button?: number; readonly modifiers?: number };
+  "mouse-leave": Record<string, never>;
+  "mouse-down": { readonly x: number; readonly y: number; readonly button?: number; readonly modifiers?: number };
+  "mouse-up": { readonly x: number; readonly y: number; readonly button?: number; readonly modifiers?: number };
+  scroll: { readonly deltaX: number; readonly deltaY: number };
+  "file-drop": { readonly files?: string[] };
+  "file-hover": { readonly files?: string[] };
+  "file-hover-cancel": Record<string, never>;
+  "theme-changed": { readonly text: "light" | "dark" };
+}
+
+export type WindowEventName = keyof WindowEventPayloads;
+
 interface NavigationResult {
   readonly errorText?: string;
 }
@@ -73,10 +94,6 @@ interface FrameNavigatedParams {
   readonly frame?: { readonly parentId?: string; readonly url?: string };
 }
 
-interface HostEvent {
-  readonly event: string;
-}
-
 /** Module-level: one WebView2 browser process per app, hence one port and one data folder. */
 let activePort: number | undefined;
 let activeDataDir: string | undefined;
@@ -95,6 +112,7 @@ class WindowHost {
   readonly #child: Bun.Subprocess<"pipe", "pipe", "inherit">;
   #closed = false;
   readonly #closedWaiters: Array<() => void> = [];
+  readonly #eventWaiters = new Set<(event: string, payload: unknown) => void>();
 
   constructor(readonly options: { title: string; width: number; height: number }) {
     const config = JSON.stringify(options);
@@ -131,8 +149,11 @@ class WindowHost {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
         if (line.length > 0) {
-          const event = JSON.parse(line) as Partial<HostEvent>;
-          if (event.event === "closed") this.#handleClosed();
+          const message = JSON.parse(line) as Record<string, unknown>;
+          if (typeof message.event === "string") {
+            if (message.event === "closed") this.#handleClosed();
+            for (const waiter of this.#eventWaiters) waiter(message.event, message);
+          }
         }
         newline = buffer.indexOf("\n");
       }
@@ -148,6 +169,12 @@ class WindowHost {
   onClosed(listener: () => void): void {
     if (this.#closed) listener();
     else this.#closedWaiters.push(listener);
+  }
+
+  /** Subscribe to host stdout events (window events + lifecycle). */
+  onHostEvent(listener: (event: string, payload: unknown) => void): () => void {
+    this.#eventWaiters.add(listener);
+    return () => this.#eventWaiters.delete(listener);
   }
 
   get closed(): boolean {
@@ -173,6 +200,7 @@ export class Webview2Window {
   #closed = false;
   #url: string | undefined;
   readonly #closedWaiters: Array<() => void> = [];
+  readonly #eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
   #navigationTimeoutMs: number;
 
   private constructor(host: WindowHost, cdp: CdpConnection, opts: Webview2WindowOptions) {
@@ -180,6 +208,12 @@ export class Webview2Window {
     this.#cdp = cdp;
     this.#navigationTimeoutMs = (opts.navigationTimeoutSeconds ?? 30) * 1000;
     host.onClosed(() => this.#handleClosed());
+    // Events arrive as JSON from our own child process — trusted channel,
+    // so one narrow cast from unknown is all the validation needed.
+    host.onHostEvent((event, payload) => {
+      if (event === "closed") return;
+      this.#eventHandlers.get(event)?.forEach((handler) => handler(payload));
+    });
     cdp.on("Runtime.bindingCalled", (params) => this.#handleBinding(params));
     cdp.on("Page.frameNavigated", (params) => {
       const frame = (params as Partial<FrameNavigatedParams>)?.frame;
@@ -343,6 +377,15 @@ export class Webview2Window {
     return this.#url;
   }
 
+  /**
+   * The live CDP connection for this window's page — the escape hatch to the
+   * full Chrome DevTools Protocol (Network, DOM, Input, Emulation, …) when
+   * the typed methods here don't cover a need.
+   */
+  get cdp(): CdpConnection {
+    return this.#cdp;
+  }
+
   /** True once the window has been closed by the user or `close()`. */
   get closed(): boolean {
     return this.#closed;
@@ -352,6 +395,20 @@ export class Webview2Window {
   onClosed(listener: () => void): void {
     if (this.#closed) listener();
     else this.#closedWaiters.push(listener);
+  }
+
+  /**
+   * Subscribe to a native window event (move, resize, focus/blur, key/mouse,
+   * file-drop for drag & drop, scroll, theme-changed). Returns an
+   * unsubscribe function.
+   */
+  on<K extends WindowEventName>(event: K, handler: (payload: WindowEventPayloads[K]) => void): () => void {
+    const handlers = this.#eventHandlers.get(event) ?? new Set<(payload: unknown) => void>();
+    // trusted child-protocol payloads; the double cast bridges the generic's
+    // contravariance, which a single cast cannot express
+    handlers.add(handler as unknown as (payload: unknown) => void);
+    this.#eventHandlers.set(event, handlers);
+    return () => handlers.delete(handler);
   }
 
   // --- Native window controls (proxied to the host process) ---

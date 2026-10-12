@@ -4,7 +4,7 @@
  * URL tracking, screenshots, multi-window target claiming, hardening options,
  * and the close lifecycle. Exits 0 on success.
  */
-import { createWindow } from "../src/index.ts";
+import { createWindow, serveApp } from "../src/index.ts";
 
 // watchdog: never let a stalled check hang the harness
 setTimeout(() => {
@@ -101,8 +101,43 @@ await check("F12 allowed when devToolsKeys:true (synthetic)", (await win2.evalua
   })()`)) === false);
 await check("windows are independent", (await win.evaluate<string>("document.title")) === "Example Domain");
 
-// 5. close lifecycle
-await log("phase 5: close lifecycle");
+// 6. CDP escape hatch
+await log("phase 6: CDP escape hatch");
+const direct = (await win.cdp.call("Runtime.evaluate", { expression: "6 * 7", returnByValue: true })) as {
+  result?: { value?: unknown };
+};
+await check("win.cdp raw Runtime.evaluate", direct.result?.value === 42);
+
+// 7. window events
+await log("phase 7: window events");
+const resized = Promise.withResolvers<{ width: number; height: number }>();
+win.on("resize", (payload) => resized.resolve(payload));
+win.setSize(640, 520);
+const resizeEvent = await Promise.race([resized.promise, Bun.sleep(3000).then(() => null)]);
+await check("resize event forwarded from host", resizeEvent !== null && resizeEvent.width === 640 && resizeEvent.height === 520);
+win.setSize(500, 400);
+
+// 8. served content (the custom-protocol answer)
+await log("phase 8: served content");
+const served = serveApp((req) =>
+  req.url.endsWith("/api/time")
+    ? Response.json({ ok: true })
+    : new Response(
+        "<title>served</title><h1>from serveApp</h1><script>fetch('/api/time').then(r => r.json()).then(d => document.title = d.ok ? 'api-ok' : 'api-fail')</script>",
+        { headers: { "Content-Type": "text/html" } },
+      ),
+);
+const win3 = await createWindow({ title: "verify-3", width: 400, height: 300, url: served.url });
+await check("served page loaded", (await win3.evaluate<string>("document.body.innerText"))?.includes("from serveApp") === true);
+for (let i = 0; i < 20 && (await win3.evaluate<string>("document.title")) !== "api-ok"; i++) {
+  await Bun.sleep(100);
+}
+await check("served API round-trip", (await win3.evaluate<string>("document.title")) === "api-ok");
+win3.close();
+served.stop();
+
+// 9. close lifecycle — last: it closes everything
+await log("phase 9: close lifecycle");
 const win2Closed = Promise.withResolvers<boolean>();
 win2.onClosed(() => win2Closed.resolve(true));
 win2.close();
@@ -114,6 +149,7 @@ try {
   process.exit(1);
 } catch {
   await log("ok — closed window rejects evaluate");
-  await log("ALL CHECKS PASSED");
-  process.exit(0);
 }
+
+await log("ALL CHECKS PASSED");
+process.exit(0);

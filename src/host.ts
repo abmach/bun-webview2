@@ -40,6 +40,30 @@ const emit = (payload: Record<string, unknown>): void => {
 
 win.on("close", () => emit({ event: "closed" }));
 
+// Forward tao window events to the parent (one JSON line per event).
+// Payloads come from the typed wrapper; the parent trusts its own child.
+const forwardedEvents = [
+  "move",
+  "resize",
+  "focus",
+  "blur",
+  "key-down",
+  "key-up",
+  "mouse-enter",
+  "mouse-leave",
+  "mouse-down",
+  "mouse-up",
+  "scroll",
+  "file-drop",
+  "file-hover",
+  "file-hover-cancel",
+  "theme-changed",
+] as const;
+for (const eventName of forwardedEvents) {
+  // payload shape varies per event; the child emits, the parent types
+  win.on(eventName, (payload: unknown) => emit(payload as Record<string, unknown>));
+}
+
 // stdin: one JSON command per line
 const decoder = new TextDecoder();
 let buffer = "";

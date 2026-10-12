@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — 2026-10-12
+
+- Native window events on `win.on(...)`, typed and forwarded from the host process: `move`, `resize`, `focus`, `blur`, `key-down`, `key-up`, `mouse-enter/leave/down/up`, `scroll`, `file-drop` (drag & drop), `file-hover`, `file-hover-cancel`, `theme-changed`.
+- `win.cdp` — direct access to the live CDP connection (Network, DOM, Input, Emulation, …).
+- `serveApp(handler)` — serve app content from Bun on a free loopback port (fetch-style `Request → Response`); the answer to custom protocols.
+
 ## 0.1.0 — 2026-10-12
 
 Initial release.

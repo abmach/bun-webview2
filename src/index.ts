@@ -8,7 +8,15 @@
  */
 
 export { Webview2Window, createWindow } from "./window.ts";
-export type { Webview2WindowOptions, ExposedFunction, ScreenshotFormat } from "./window.ts";
+export type {
+  Webview2WindowOptions,
+  ExposedFunction,
+  ScreenshotFormat,
+  WindowEventPayloads,
+  WindowEventName,
+} from "./window.ts";
 export type { HardeningOptions } from "./inject.ts";
 export { CdpConnection, pickFreePort, waitForPageTarget } from "./cdp.ts";
 export type { CdpTargetInfo } from "./cdp.ts";
+export { serveApp } from "./serve.ts";
+export type { ServedApp } from "./serve.ts";

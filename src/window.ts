@@ -454,6 +454,26 @@ export class Webview2Window {
       this.#handleClosed();
     }
   }
+
+  /**
+   * Close via the host's own close op and wait for its "closed" event — the
+   * same path a user's close button takes. Rejects if the host doesn't
+   * confirm within `timeoutMs` (default 5s), after which the window is
+   * force-closed instead.
+   */
+  async closeGracefully(timeoutMs = 5_000): Promise<void> {
+    if (this.#closed) return;
+    const confirmed = Promise.withResolvers<void>();
+    this.onClosed(() => confirmed.resolve());
+    this.#host.invoke("close");
+    const timer = Bun.sleep(timeoutMs);
+    const winner = await Promise.race([confirmed.promise.then(() => "closed" as const), timer.then(() => "timeout" as const)]);
+    if (winner === "timeout") {
+      this.#host.kill();
+      this.#handleClosed();
+      throw new Error("bun-webview2: host did not confirm close in time; window force-closed");
+    }
+  }
 }
 
 /** Shorthand for `Webview2Window.create`. */

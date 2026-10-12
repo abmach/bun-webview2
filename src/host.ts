@@ -85,6 +85,12 @@ await Bun.stdin.stream().pipeTo(
   }),
 );
 
+// stdin ended: the parent is gone or shut us down deliberately. A window
+// must never outlive its app process — a hard-killed parent that orphans a
+// pump-alive host is exactly the wedged-process mode this guards against.
+win.close();
+process.exit(0);
+
 function applyCommand(command: HostCommand): void {
   const args = command.args ?? [];
   switch (command.op) {
@@ -113,6 +119,8 @@ function applyCommand(command: HostCommand): void {
       win.setMaximized(true);
       break;
     case "close":
+      // emit before teardown: the window's destruction races stdout flushing
+      emit({ event: "closed" });
       win.close();
       break;
   }

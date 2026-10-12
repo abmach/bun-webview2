@@ -138,10 +138,12 @@ served.stop();
 
 // 9. close lifecycle — last: it closes everything
 await log("phase 9: close lifecycle");
+// graceful path: host-initiated close, confirmed by the host's "closed" event
 const win2Closed = Promise.withResolvers<boolean>();
 win2.onClosed(() => win2Closed.resolve(true));
-win2.close();
-await check("close event fires", await Promise.race([win2Closed.promise, Bun.sleep(2000).then(() => false)]));
+await win2.closeGracefully();
+await check("graceful close confirmed by host", await Promise.race([win2Closed.promise, Bun.sleep(2000).then(() => false)]));
+// kill path: force close, CDP teardown
 win.close();
 try {
   await win.evaluate("1");

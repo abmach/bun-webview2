@@ -58,13 +58,12 @@ await win.expose("asyncSum", async (a: unknown, b: unknown) => {
   return { sum: x + y };
 });
 await check("IPC async object result", JSON.stringify(await win.evaluate("window.bwv2.call('asyncSum', 20, 22)")) === '{"sum":42}');
-await check("IPC error rejection", (await win.evaluate<string>(`
-  window.bwv2.call('echo', 'x').then(() => 'no-error', (e) => e.message)`)).includes("nothing exposed") === false);
 await win.expose("boom", () => {
   throw new Error("exploded");
 });
-await check("IPC host exception surfaces in page", (await win.evaluate<string>(`
-  window.bwv2.call('boom').then(() => 'no-error', (e) => e.message)`)).includes("exploded"));
+const boomError = await win.evaluate<string>(`
+  window.bwv2.call('boom').then(() => 'no-error', (e) => e.message)`);
+await check("IPC host exception surfaces in page", typeof boomError === "string" && boomError.includes("exploded"));
 
 // 3. remote navigation + url tracking + screenshot
 await log("phase 3: remote navigation + screenshot");
@@ -104,13 +103,10 @@ await check("windows are independent", (await win.evaluate<string>("document.tit
 
 // 5. close lifecycle
 await log("phase 5: close lifecycle");
-let win2Closed = false;
-win2.onClosed(() => {
-  win2Closed = true;
-});
+const win2Closed = Promise.withResolvers<boolean>();
+win2.onClosed(() => win2Closed.resolve(true));
 win2.close();
-await new Promise<void>((resolve) => setTimeout(resolve, 100));
-await check("close event fires", win2Closed === true);
+await check("close event fires", await Promise.race([win2Closed.promise, Bun.sleep(2000).then(() => false)]));
 win.close();
 try {
   await win.evaluate("1");

@@ -406,9 +406,10 @@ export class Webview2Window {
     const handlers = this.#eventHandlers.get(event) ?? new Set<(payload: unknown) => void>();
     // trusted child-protocol payloads; the double cast bridges the generic's
     // contravariance, which a single cast cannot express
-    handlers.add(handler as unknown as (payload: unknown) => void);
+    const wrapped = handler as unknown as (payload: unknown) => void;
+    handlers.add(wrapped);
     this.#eventHandlers.set(event, handlers);
-    return () => handlers.delete(handler);
+    return () => handlers.delete(wrapped);
   }
 
   // --- Native window controls (proxied to the host process) ---

@@ -1,0 +1,38 @@
+{
+  "name": "bun-webview2",
+  "version": "0.1.0",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "devDependencies": {
+    "bun-types": "^1.4.3",
+    "typescript": "^7.0.2"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "description": "Desktop apps with Bun: native WebView2 windows you fully control, driven over the Chrome DevTools Protocol.",
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "bun",
+    "webview2",
+    "webview",
+    "desktop",
+    "gui",
+    "cdp",
+    "windows"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@webviewjs/webview": "0.4.7"
+  }
+}

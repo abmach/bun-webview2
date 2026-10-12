@@ -221,7 +221,7 @@ export class Webview2Window {
       height: opts.height ?? 600,
     });
 
-    const target: CdpTargetInfo = await waitForPageTarget(activePort, claimedTargets);
+    const target: CdpTargetInfo = await waitForPageTarget(activePort, claimedTargets, 15_000, activeDataDir);
     claimedTargets.add(target.webSocketDebuggerUrl);
 
     const cdp = new CdpConnection(target.webSocketDebuggerUrl);
@@ -280,22 +280,17 @@ export class Webview2Window {
     const { promise: loaded, resolve: fireLoaded, reject: failLoaded } = Promise.withResolvers<void>();
     const unsubscribe = this.#cdp.on("Page.loadEventFired", () => fireLoaded());
     const timer = setTimeout(() => failLoaded(new Error(`bun-webview2: navigation to ${url} timed out`)), this.#navigationTimeoutMs);
-    const timeoutRace = Promise.withResolvers<NavigationResult>();
-    const callTimer = setTimeout(() => timeoutRace.reject(new Error(`bun-webview2: navigation to ${url} timed out`)), this.#navigationTimeoutMs);
 
     try {
-      const result = (await Promise.race([
-        this.#cdp.call("Page.navigate", { url }),
-        timeoutRace.promise,
-      ])) as NavigationResult;
-      clearTimeout(callTimer);
+      // cdp.call's timeout guards the command itself; the load-wait timer
+      // below guards the navigation completing.
+      const result = (await this.#cdp.call("Page.navigate", { url }, this.#navigationTimeoutMs)) as NavigationResult;
       if (typeof result?.errorText === "string" && result.errorText !== "") {
         throw new Error(`bun-webview2: navigation to ${url} failed: ${result.errorText}`);
       }
       await loaded;
     } finally {
       clearTimeout(timer);
-      clearTimeout(callTimer);
       unsubscribe();
     }
   }

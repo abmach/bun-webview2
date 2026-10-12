@@ -50,6 +50,7 @@ export async function waitForPageTarget(
   port: number,
   claimed: ReadonlySet<string>,
   timeoutMs = 15_000,
+  dataDirHint?: string,
 ): Promise<CdpTargetInfo> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -72,7 +73,14 @@ export async function waitForPageTarget(
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`bun-webview2: CDP endpoint on port ${port} did not expose a page target within ${timeoutMs}ms`);
+  throw new Error(
+    `bun-webview2: no CDP page target appeared on port ${port} within ${timeoutMs}ms. ` +
+      "Likely causes: another instance of this app is already running (apps are single-instance per data folder), " +
+      "or a previous run was hard-killed leaving a wedged WebView2 browser process. " +
+      (dataDirHint
+        ? `Kill lingering msedgewebview2 processes for this data folder or delete it (${dataDirHint}), or pass a different dataDir.`
+        : "Pass a different dataDir."),
+  );
 }
 
 export class CdpConnection {
@@ -122,12 +130,27 @@ export class CdpConnection {
     return this.#closed;
   }
 
-  /** Send a command and await its response result. */
-  call(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  /** Send a command and await its response result. Commands that never get a
+   * response become rejections after timeoutMs instead of hanging forever —
+   * wedged WebView2 targets are a real failure mode, not a theory. */
+  call(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<unknown> {
     if (this.#closed) return Promise.reject(new Error("bun-webview2: CDP connection closed"));
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
     const id = this.#nextId++;
-    this.#pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      this.#pending.delete(id);
+      reject(new Error(`bun-webview2: CDP call ${method} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    this.#pending.set(id, {
+      resolve: (value: unknown) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: (err: Error) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    });
     this.#ws.send(JSON.stringify({ id, method, params }));
     return promise;
   }

@@ -14,3 +14,4 @@ Initial release.
 - Targets are "primed" with one throwaway `about:blank` navigation before CDP setup: on a never-navigated webview, `Runtime.enable` and even `Page.navigate` can wedge forever.
 - Per-app WebView2 data folder (`dataDir` option; default keyed to the project directory) so different Bun webview apps don't share one browser process; same-app second processes are treated as single-instance conflicts.
 - `BWV2_HOST_EXE` lets compiled executables ship a pre-compiled host binary.
+- Every CDP call rejects after a timeout (default 30s) instead of hanging forever on a wedged target; the target-wait failure names its likely causes (second app instance, hard-killed previous run) and remedies.

@@ -4,7 +4,7 @@
 
 - Window commands no longer depend on the host process's JS event loop. On Windows, webviewjs's pump is tao's blocking `run_return()`, which can freeze a host's whole Bun loop (timers, sockets, stdin). Commands now ride the page: `window.ipc.postMessage(...)` via CDP, delivered natively by wry, acked on stdout — immune to the wedge. (stdin and TCP control channels both proved unreliable and were removed.)
 - Hosts exit when their window closes (user close or `close` command) instead of lingering.
-- Known limitation: in wedged hosts, window-event forwarding can stop after a CDP-driven navigation; commands, acks, and IPC are unaffected. Upstream: webviewjs/tao Windows pump.
+- Window events verified to flow across CDP-driven navigations in both wedged and healthy hosts (an earlier "events stop after navigation" claim was a test artifact — the probe resized to an already-current size, so no event could fire).
 
 ## 0.2.0 — 2026-10-12
 

@@ -69,14 +69,7 @@ graph TB
 
 wry's own initial-navigation path (`NativeWindow.loadUrl` / `loadHtml`) can stall the first page load for seconds on some machines. CDP-driven navigation against the exact same WebView2 process commits in ~30 ms. bun-webview2 therefore never touches the wry navigation path — `html` and `url` options are delivered via CDP, and you get the fast path for free. (Measured on the reference machine: cold start → loaded page ≈ 1 s; `evaluate` round-trip ≈ 0.5–1 ms.)
 
-Related, and also handled for you: on a never-navigated webview target, CDP commands that need a renderer (`Runtime.enable`, even `Page.navigate` itself) can wedge forever. The library sends one throwaway `about:blank` navigation before any other setup, which commits a document and makes the whole protocol deterministic.
-
-### Known limitation
-
-In a wedged host (see above), native window-event forwarding can stop after a
-CDP-driven navigation while commands and IPC keep working. The wedge is a
-webviewjs/tao Windows issue (their `run_return`-based pump); window controls
-and the page are unaffected. Avoided entirely when the host's loop is healthy.
+Related, and also handled for you: on a never-navigated webview target, CDP commands that need a renderer (`Runtime.enable`, even `Page.navigate` itself) can wedge forever. The library sends one throwaway `about:blank` navigation before any other setup, which commits a document and makes the whole protocol deterministic. Window events keep flowing across CDP-driven navigations — verified with real size changes in both wedged and healthy hosts.
 
 ## API
 

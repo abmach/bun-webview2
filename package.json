@@ -13,10 +13,10 @@
   "description": "Desktop apps with Bun: native WebView2 windows you fully control, driven over the Chrome DevTools Protocol.",
   "repository": {
     "type": "git",
-    "url": "git+https://gitlab.com/abmach/bun-webview2.git"
+    "url": "git+https://github.com/abmach/bun-webview2.git"
   },
   "bugs": {
-    "url": "https://gitlab.com/abmach/bun-webview2/-/issues"
+    "url": "https://github.com/abmach/bun-webview2/issues"
   },
   "engines": {
     "bun": ">=1.2"

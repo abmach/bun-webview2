@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-10-13
+
+- `minWidth`/`minHeight` window options: minimum window size in client
+  coordinates, enforced on user drags and programmatic `setSize` alike
+  (via the C library's sizing hints + `WM_GETMINMAXINFO`, with the window
+  frame delta compensated). One-sided limits are rejected at creation.
+
 ## 0.3.0 — 2026-10-13
 
 - Window layer replaced: hosts now drive the [C `webview` library](https://github.com/webview/webview) through `bun:ffi` — zero npm runtime dependencies. The DLL (~540 KB) is built once with `zig c++` (no MSVC, no cmake); sources and pinned WebView2 SDK headers live in the build workspace.

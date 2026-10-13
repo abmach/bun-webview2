@@ -21,6 +21,8 @@ interface HostConfig {
   readonly title: string;
   readonly width: number;
   readonly height: number;
+  readonly minWidth?: number;
+  readonly minHeight?: number;
 }
 
 interface HostCommand {
@@ -65,6 +67,7 @@ const advapi32 = dlopen("advapi32.dll", {
 const cstr = (s: string) => ptr(Buffer.from(`${s}\0`, "utf8"));
 
 const WEBVIEW_HINT_NONE = 0;
+const WEBVIEW_HINT_MIN = 1;
 const SWP_NOSIZE = 0x0001;
 const SWP_NOMOVE = 0x0002;
 const SWP_NOZORDER = 0x0004;
@@ -232,6 +235,23 @@ const bindCallback = new JSCallback(
 
 webview.symbols.webview_set_title(handle, cstr(config.title ?? "bun-webview2"));
 webview.symbols.webview_set_size(handle, config.width ?? 800, config.height ?? 600, WEBVIEW_HINT_NONE);
+if (typeof config.minWidth === "number" && typeof config.minHeight === "number") {
+  // WEBVIEW_HINT_MIN stores m_minsz; WM_GETMINMAXINFO enforces it on drags
+  // and programmatic resizes alike. The track size is in OUTER coordinates,
+  // so the frame delta is added to keep the minimum a CLIENT-size minimum.
+  const outer = Buffer.alloc(16);
+  const inner = Buffer.alloc(16);
+  user32.symbols.GetWindowRect(hwnd, ptr(outer));
+  user32.symbols.GetClientRect(hwnd, ptr(inner));
+  const frameW = outer.readInt32LE(8) - outer.readInt32LE(0) - (inner.readInt32LE(8) - inner.readInt32LE(0));
+  const frameH = outer.readInt32LE(12) - outer.readInt32LE(4) - (inner.readInt32LE(12) - inner.readInt32LE(4));
+  webview.symbols.webview_set_size(
+    handle,
+    Math.max(1, config.minWidth + frameW),
+    Math.max(1, config.minHeight + frameH),
+    WEBVIEW_HINT_MIN,
+  );
+}
 webview.symbols.webview_bind(handle, cstr("bwv2_host_cmd"), bindCallback.ptr, null);
 
 // about:blank keeps the initial document inert; the parent drives all real

@@ -29,6 +29,10 @@ export interface Webview2WindowOptions extends HardeningOptions {
   readonly title?: string;
   readonly width?: number;
   readonly height?: number;
+  /** Minimum window size. Both must be set together — one-sided limits are rejected. */
+  readonly minWidth?: number;
+  /** @see minWidth */
+  readonly minHeight?: number;
   /** Initial URL to load. */
   readonly url?: string;
   /** Initial inline HTML to load (delivered as a data: URL). */
@@ -123,7 +127,9 @@ class WindowHost {
   readonly #closedWaiters: Array<() => void> = [];
   readonly #eventWaiters = new Set<(event: string, payload: unknown) => void>();
 
-  constructor(readonly options: { title: string; width: number; height: number }) {
+  constructor(
+    readonly options: { title: string; width: number; height: number; minWidth?: number; minHeight?: number },
+  ) {
     const config = JSON.stringify(options);
     // Compiled executables re-run themselves instead of acting as a runtime,
     // so shipped apps point BWV2_HOST_EXE at a pre-compiled host binary.
@@ -262,11 +268,16 @@ export class Webview2Window {
         `bun-webview2: dataDir ${opts.dataDir} requested, but this app already uses ${activeDataDir}. All windows share one data folder.`,
       );
     }
+    if ((opts.minWidth !== undefined) !== (opts.minHeight !== undefined)) {
+      throw new Error("bun-webview2: minWidth and minHeight must be set together — one-sided limits are not supported.");
+    }
 
     const host = new WindowHost({
       title: opts.title ?? "bun-webview2",
       width: opts.width ?? 800,
       height: opts.height ?? 600,
+      minWidth: opts.minWidth,
+      minHeight: opts.minHeight,
     });
 
     const target: CdpTargetInfo = await waitForPageTarget(activePort, claimedTargets, 15_000, activeDataDir);

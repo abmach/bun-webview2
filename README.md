@@ -84,6 +84,7 @@ Related, and also handled for you: on a never-navigated webview target, CDP comm
 |---|---|---|---|
 | `title` | `string` | `"bun-webview2"` | Window title |
 | `width` / `height` | `number` | `800` / `600` | Initial window size |
+| `minWidth` / `minHeight` | `number` | — | Minimum window size (client coordinates); enforced on drags and `setSize` alike. Both must be set together. |
 | `url` | `string` | — | Initial URL to load |
 | `html` | `string` | — | Initial inline HTML (loaded as a `data:` URL) |
 | `contextMenu` | `boolean` | `false` | Allow the native Chromium right-click menu (blocked by default) |

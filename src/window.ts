@@ -153,10 +153,18 @@ class WindowHost {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
         if (line.length > 0) {
-          const message = JSON.parse(line) as Record<string, unknown>;
-          if (typeof message.event === "string") {
-            if (message.event === "closed") this.#handleClosed();
-            for (const waiter of this.#eventWaiters) waiter(message.event, message);
+          // tolerate stray non-JSON lines (inherited handles, renderer
+          // warnings): one bad line must never kill the whole reader loop
+          let message: unknown;
+          try {
+            message = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          const event = (message as Record<string, unknown>).event;
+          if (typeof event === "string") {
+            if (event === "closed") this.#handleClosed();
+            for (const waiter of this.#eventWaiters) waiter(event, message);
           }
         }
         newline = buffer.indexOf("\n");

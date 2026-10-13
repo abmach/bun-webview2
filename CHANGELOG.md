@@ -8,6 +8,9 @@
 - resize/move events synthesized by polling window geometry over the command channel at 5 Hz while listeners exist (client-size semantics, matching tao's events). Keyboard/mouse/file-drop events are not currently forwarded.
 - Parents kill their host children on exit (no orphaned hosts wedging the shared browser for the data folder).
 - Why the switch: the wry/tao host's Windows "non-blocking" pump (`run_return`) could freeze a host's entire JS event loop (verified upstream, root cause in webviewjs's `app.rs`), requiring three workarounds (page-relay commands, stdout acks, resend-until-ack). The C library has no JS loop at all, eliminating the failure class.
+- Window events, split by layer: window-level events (`move`, `resize`, `focus`/`blur` via `WM_ACTIVATE`, `theme-changed`) are forwarded from a subclassed window procedure (`SetWindowLongPtrW` via FFI, chained with `CallWindowProcW`); page-surface events (`key-down`/`key-up`, `mouse-*`, `scroll`, `file-drop`) are DOM events captured by an injected bridge and forwarded through the existing CDP binding. The split exists because input over the page never reaches the top-level window procedure (the WebView2 child HWND consumes it) — verified by live interaction testing.
+- `file-drop` delivers `File` descriptors (name/size/type) from the DOM drop event — not filesystem paths.
+- Benchmarks unchanged by the event architecture (cold ~0.8 s, evaluate/IP C sub-millisecond).
 
 ## 0.2.1 — 2026-10-12
 

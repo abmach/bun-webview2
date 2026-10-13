@@ -23,7 +23,7 @@
  */
 
 import { CdpConnection, pickFreePort, waitForPageTarget, type CdpTargetInfo } from "./cdp.ts";
-import { buildHardeningScript, buildIpcBridgeScript, type HardeningOptions } from "./inject.ts";
+import { buildHardeningScript, buildIpcBridgeScript, buildPageEventsScript, type HardeningOptions } from "./inject.ts";
 
 export interface Webview2WindowOptions extends HardeningOptions {
   readonly title?: string;
@@ -68,9 +68,7 @@ export interface WindowEventPayloads {
   "mouse-down": { readonly x: number; readonly y: number; readonly button?: number; readonly modifiers?: number };
   "mouse-up": { readonly x: number; readonly y: number; readonly button?: number; readonly modifiers?: number };
   scroll: { readonly deltaX: number; readonly deltaY: number };
-  "file-drop": { readonly files?: string[] };
-  "file-hover": { readonly files?: string[] };
-  "file-hover-cancel": Record<string, never>;
+  "file-drop": { readonly files?: Array<{ readonly name: string; readonly size: number; readonly type: string }> };
   "theme-changed": { readonly text: "light" | "dark" };
 }
 
@@ -96,14 +94,6 @@ interface BindingCalledParams {
 
 interface FrameNavigatedParams {
   readonly frame?: { readonly parentId?: string; readonly url?: string };
-}
-
-/** Geometry reported by the host's queryState command. */
-interface HostWindowState {
-  readonly width: number;
-  readonly height: number;
-  readonly x: number;
-  readonly y: number;
 }
 
 /** Module-level: one WebView2 browser process per app, hence one port and one data folder. */
@@ -226,8 +216,6 @@ export class Webview2Window {
   readonly #closedWaiters: Array<() => void> = [];
   readonly #eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
   #navigationTimeoutMs: number;
-  #statePoller: Timer | undefined;
-  #lastState: HostWindowState | undefined;
 
   private constructor(host: WindowHost, cdp: CdpConnection, opts: Webview2WindowOptions) {
     this.#host = host;
@@ -254,7 +242,6 @@ export class Webview2Window {
     this.#closed = true;
     this.#cdp.close();
     for (const notify of this.#closedWaiters) notify();
-    this.#stopStatePolling();
   }
 
   /**
@@ -300,6 +287,7 @@ export class Webview2Window {
     await cdp.call("Runtime.enable");
     await cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: buildHardeningScript(opts) });
     await cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: buildIpcBridgeScript() });
+    await cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: buildPageEventsScript() });
     await cdp.call("Runtime.addBinding", { name: "__bwv2Ipc" });
 
     // Confirm the parent→host command channel (CDP -> page -> bind -> host).
@@ -314,6 +302,14 @@ export class Webview2Window {
     const { name, payload } = (params ?? {}) as Partial<BindingCalledParams>;
     if (name !== "__bwv2Ipc" || typeof payload !== "string") return;
     const request = JSON.parse(payload) as { id: number; name: string; args?: unknown[] };
+    if (request.name === "__event") {
+      // page-surface event forwarded by the injected bridge; no reply expected
+      const [eventName, eventPayload] = request.args ?? [];
+      if (typeof eventName === "string") {
+        this.#eventHandlers.get(eventName)?.forEach((handler) => handler(eventPayload));
+      }
+      return;
+    }
     const fn = this.#exposed.get(request.name);
     if (!fn) {
       void this.#reply(request.id, false, `bun-webview2: nothing exposed under "${request.name}"`);
@@ -468,75 +464,7 @@ export class Webview2Window {
     const wrapped = handler as unknown as (payload: unknown) => void;
     handlers.add(wrapped);
     this.#eventHandlers.set(event, handlers);
-    if (event === "resize" || event === "move") this.#startStatePolling();
-    return () => {
-      handlers.delete(wrapped);
-      if (
-        (event === "resize" || event === "move") &&
-        (this.#eventHandlers.get("resize")?.size ?? 0) === 0 &&
-        (this.#eventHandlers.get("move")?.size ?? 0) === 0
-      ) {
-        this.#stopStatePolling();
-      }
-    };
-  }
-
-  /**
-   * Poll-based resize/move synthesis: the C webview library's flat API has
-   * no event subscriptions, so geometry is queried over the command channel
-   * (which runs entirely on the native loop — immune to every JS-loop
-   * failure mode) while anyone listens for resize/move.
-   */
-  #startStatePolling(): void {
-    if (this.#statePoller !== undefined || this.#closed) return;
-    const dbg = Bun.env.BWV2_DEBUG === "1";
-    // An immediate first query pins the baseline BEFORE any subsequent
-    // setSize: CDP commands are serialized, so this snapshot is guaranteed
-    // to precede any resize command issued after subscription.
-    void this.#sendCommand("queryState").then((state) => {
-      if (dbg) console.error(`[bwv2] poll baseline: ${JSON.stringify(state)}`);
-      if (state !== null && typeof state === "object") {
-        const source = state as Partial<HostWindowState>;
-        if (
-          typeof source.width === "number" && typeof source.height === "number" &&
-          typeof source.x === "number" && typeof source.y === "number"
-        ) {
-          this.#onStatePolled({ width: source.width, height: source.height, x: source.x, y: source.y });
-        }
-      }
-    });
-    this.#statePoller = setInterval(() => {
-      void this.#sendCommand("queryState").then((state) => {
-        if (dbg) console.error(`[bwv2] poll tick: ${JSON.stringify(state)}`);
-        if (state === null || typeof state !== "object") return;
-        const source = state as Partial<HostWindowState>;
-        if (
-          typeof source.width === "number" && typeof source.height === "number" &&
-          typeof source.x === "number" && typeof source.y === "number"
-        ) {
-          this.#onStatePolled({ width: source.width, height: source.height, x: source.x, y: source.y });
-        }
-      });
-    }, 200);
-  }
-
-  #stopStatePolling(): void {
-    if (this.#statePoller !== undefined) {
-      clearInterval(this.#statePoller);
-      this.#statePoller = undefined;
-    }
-  }
-
-  #onStatePolled(state: HostWindowState): void {
-    const previous = this.#lastState;
-    this.#lastState = state;
-    if (previous === undefined) return;
-    if (previous.width !== state.width || previous.height !== state.height) {
-      this.#eventHandlers.get("resize")?.forEach((handler) => handler({ width: state.width, height: state.height }));
-    }
-    if (previous.x !== state.x || previous.y !== state.y) {
-      this.#eventHandlers.get("move")?.forEach((handler) => handler({ x: state.x, y: state.y }));
-    }
+    return () => handlers.delete(wrapped);
   }
 
   // --- Native window controls (delivered to the host via the page) ---

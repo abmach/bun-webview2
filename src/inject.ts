@@ -71,3 +71,41 @@ export function buildIpcBridgeScript(): string {
   };
 })();`;
 }
+
+/**
+ * Page-surface events: input over the page never reaches the host's window
+ * procedure (the WebView2 child HWND consumes it), so keys, mouse, wheel,
+ * and drag-and-drop are captured as DOM events and forwarded through the
+ * existing __bwv2Ipc binding. DOM events are also richer than the Win32
+ * equivalents: KeyboardEvent carries layout/IME-aware key and code, and
+ * the drop event exposes File objects (readable content) rather than paths.
+ */
+export function buildPageEventsScript(): string {
+  return `(() => {
+  if (window.__bwv2PageEvents) return;
+  Object.defineProperty(window, '__bwv2PageEvents', { value: true });
+  const send = (name, payload) =>
+    window.__bwv2Ipc(JSON.stringify({ id: -1, name: '__event', args: [name, payload] }));
+  const mods = (e) =>
+    (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+  document.addEventListener('keydown', (e) =>
+    send('key-down', { key: e.key, code: e.code, modifiers: mods(e), isRepeat: e.repeat }), true);
+  document.addEventListener('keyup', (e) =>
+    send('key-up', { key: e.key, code: e.code, modifiers: mods(e) }), true);
+  document.addEventListener('mousedown', (e) =>
+    send('mouse-down', { x: e.clientX, y: e.clientY, button: e.button, modifiers: mods(e) }), true);
+  document.addEventListener('mouseup', (e) =>
+    send('mouse-up', { x: e.clientX, y: e.clientY, button: e.button, modifiers: mods(e) }), true);
+  document.addEventListener('mouseenter', () => send('mouse-enter', {}), true);
+  document.addEventListener('mouseleave', () => send('mouse-leave', {}), true);
+  document.addEventListener('wheel', (e) =>
+    send('scroll', { deltaX: e.deltaX, deltaY: e.deltaY }), { capture: true, passive: true });
+  // drag-and-drop: prevent the browser default and forward the files
+  document.addEventListener('dragover', (e) => { e.preventDefault(); send('file-drop', { hover: true }); }, true);
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const files = [...(e.dataTransfer?.files ?? [])].map((f) => ({ name: f.name, size: f.size, type: f.type }));
+    send('file-drop', { files });
+  }, true);
+})();`;
+}

@@ -54,6 +54,12 @@ const user32 = dlopen("user32.dll", {
   GetClientRect: { args: [FFIType.pointer, FFIType.pointer], returns: FFIType.int },
   ShowWindow: { args: [FFIType.pointer, FFIType.i32], returns: FFIType.int },
   SetForegroundWindow: { args: [FFIType.pointer], returns: FFIType.int },
+  CallWindowProcW: { args: [FFIType.pointer, FFIType.pointer, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i64 },
+  TrackMouseEvent: { args: [FFIType.pointer], returns: FFIType.int },
+  GetKeyState: { args: [FFIType.i32], returns: FFIType.i16 },
+});
+const advapi32 = dlopen("advapi32.dll", {
+  RegGetValueW: { args: [FFIType.pointer, FFIType.pointer, FFIType.pointer, FFIType.u32, FFIType.u32, FFIType.pointer, FFIType.pointer], returns: FFIType.i32 },
 });
 
 const cstr = (s: string) => ptr(Buffer.from(`${s}\0`, "utf8"));
@@ -83,6 +89,75 @@ const hwnd = webview.symbols.webview_get_window(handle);
 const emit = (payload: Record<string, unknown>): void => {
   console.log(JSON.stringify(payload));
 };
+
+// --- Window events via WndProc subclassing -------------------------------
+// The flat C API has no event subscriptions, so the window's own procedure
+// is replaced: interesting messages become stdout events (the parent's
+// generic routing picks them up); everything chains to the original proc.
+
+const GWL_WNDPROC = -4;
+const WM_MOVE = 0x0003;
+const WM_SIZE = 0x0005;
+// Only non-client, window-level messages reach this procedure: input over
+// the page surface goes to the WebView2 child HWND and is delivered to apps
+// as page DOM events instead (src/inject.ts page-event bridge). Keys,
+// mouse, wheel, and file drops therefore have no WndProc cases at all.
+const WM_ACTIVATE = 0x0006;
+const WM_THEMECHANGED = 0x031a;
+
+// personalization: 1 = apps light theme, 0 = dark
+const themeText = (): "light" | "dark" => {
+  const value = Buffer.alloc(4);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(4, 0);
+  const subkey = Buffer.from("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0", "utf16le");
+  const valueName = Buffer.from("AppsUseLightTheme\0", "utf16le");
+  const ok = advapi32.symbols.RegGetValueW(0x80000001n /* HKEY_CURRENT_USER */, ptr(subkey), ptr(valueName), 0x0002 /* RRF_RT_REG_DWORD */, 0, ptr(value), ptr(size));
+  return ok === 0 && value.readUInt32LE(0) === 1 ? "light" : "dark";
+};
+
+const originalProc: { handle: bigint | undefined } = { handle: undefined };
+
+const wndProc = new JSCallback(
+  (hwndArg: number | bigint, msg: number | bigint, wParam: number | bigint, lParam: number | bigint) => {
+    // FFI delivers u64/i64 as number or bigint; normalize once at the boundary
+    const hwnd = BigInt(hwndArg);
+    const msgN = Number(msg);
+    const wp = BigInt.asUintN(64, BigInt(wParam));
+    const lp = BigInt.asIntN(64, BigInt(lParam));
+    switch (msgN) {
+      case WM_MOVE: {
+        const l = BigInt.asUintN(32, lp);
+        emit({ event: "move", x: Number(BigInt.asIntN(16, l & 0xffffn)), y: Number(BigInt.asIntN(16, (l >> 16n) & 0xffffn)) });
+        break;
+      }
+      case WM_SIZE: {
+        const l = BigInt.asUintN(32, lp);
+        emit({ event: "resize", width: Number(l & 0xffffn), height: Number((l >> 16n) & 0xffffn) });
+        break;
+      }
+      case WM_ACTIVATE: {
+        // window activation: clicks on the page activate the top window too,
+        // unlike WM_SETFOCUS which the WebView2 child HWND claims.
+        const active = (BigInt.asUintN(16, wp) & 0xffffn) !== 0n;
+        emit({ event: active ? "focus" : "blur" });
+        break;
+      }
+      case WM_THEMECHANGED:
+        emit({ event: "theme-changed", text: themeText() });
+        break;
+    }
+    // chain everything (handled or not) to the original procedure
+    if (originalProc.handle !== undefined) {
+      return user32.symbols.CallWindowProcW(originalProc.handle, hwnd, msgN, wp, lp);
+    }
+    return 0n;
+  },
+  { args: [FFIType.pointer, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i64 },
+);
+
+// Subclass the window so the parent receives native window events.
+originalProc.handle = user32.symbols.SetWindowLongPtrW(hwnd, GWL_WNDPROC, BigInt(wndProc.ptr ?? 0));
 
 function applyCommand(command: HostCommand): string {
   const args = command.args ?? [];
@@ -125,20 +200,13 @@ function applyCommand(command: HostCommand): string {
       return String(user32.symbols.ShowWindow(hwnd, SW_MINIMIZE));
     case "maximize":
       return String(user32.symbols.ShowWindow(hwnd, SW_MAXIMIZE));
-    case "queryState": {
-      const outer = Buffer.alloc(16); // RECT: left, top, right, bottom (i32 each)
-      const inner = Buffer.alloc(16);
-      if (user32.symbols.GetWindowRect(hwnd, ptr(outer)) === 0) return "null";
-      if (user32.symbols.GetClientRect(hwnd, ptr(inner)) === 0) return "null";
-      // client size (what tao's resize events report) + outer frame position
-      return JSON.stringify({
-        x: outer.readInt32LE(0),
-        y: outer.readInt32LE(4),
-        width: inner.readInt32LE(8) - inner.readInt32LE(0),
-        height: inner.readInt32LE(12) - inner.readInt32LE(4),
-      });
-    }
+
     case "close":
+      // restore the original procedure before tearing the window down
+      if (originalProc.handle !== undefined) {
+        user32.symbols.SetWindowLongPtrW(hwnd, GWL_WNDPROC, BigInt(originalProc.handle));
+        originalProc.handle = undefined;
+      }
       webview.symbols.webview_terminate(handle);
       return "true";
     default:

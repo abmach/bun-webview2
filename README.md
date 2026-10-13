@@ -66,7 +66,7 @@ graph TB
 - **Debug port** — the library passes `--remote-debugging-port` and the data folder to each host via the WebView2 loader environment variables (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` / `WEBVIEW2_USER_DATA_FOLDER`). All windows of an app share one WebView2 browser process and one port; each window claims its own page target.
 - **Everything else is CDP.** Navigation, evaluation, IPC, and screenshots flow over a loopback WebSocket using Bun's built-in client. No native module is loaded in your process.
 - **Window commands ride the page.** The host's only JS runs re-entrantly inside `webview_run` — the C library's plain Win32 `GetMessage` pump, so there is no JS event loop to lose at all. Commands are CDP-evaluated as `bwv2_host_cmd(...)` in the page; the C library delivers them to the host's bind callback natively, and `webview_return` resolves the page-side promise the parent awaits — a resolved call IS the delivery confirmation. (This design came from a hard lesson: the previous wry/tao-based host's "non-blocking" pump could freeze the whole JS event loop; the C library has no loop to freeze.)
-- **Window events are polled over the command channel.** The flat C API has no event subscriptions, so resize/move events are synthesized by polling window geometry (`queryState` → `GetClientRect`) at 5 Hz while anyone listens. Keyboard/mouse/file-drop events are not currently forwarded.
+- **Events are split by layer.** Window-level events (`move`, `resize`, `focus`/`blur` via `WM_ACTIVATE`, `theme-changed`) are forwarded from the host's subclassed window procedure. Page-surface events (`key-down`/`key-up`, `mouse-*`, `scroll`, `file-drop`) are captured as DOM events by an injected bridge and forwarded over the existing CDP binding — richer than Win32 could report (layout-aware `key`/`code`, readable `File` objects on drop) and working everywhere input actually lands, including cross-origin documents.
 
 ### Why all content flows through CDP (and why windows are "primed")
 
@@ -101,7 +101,7 @@ Related, and also handled for you: on a never-navigated webview target, CDP comm
 | `evaluate<T>(expression)` | Evaluate an expression in the page; promises awaited; result JSON round-tripped |
 | `expose(name, fn)` | Expose a Bun function to the page as `await window.bwv2.call(name, ...args)` |
 | `screenshot({ format, quality })` | Capture the viewport as a PNG/JPEG `Blob` |
-| `on(event, handler)` | Native window events, typed: currently `resize` and `move` (client-size semantics; synthesized from window geometry at 5 Hz while listeners exist). Keyboard/mouse/file-drop events are not yet forwarded. |
+| `on(event, handler)` | Typed window + page events: `move`, `resize`, `focus`, `blur`, `key-down`, `key-up`, `mouse-enter`/`-leave`/`-down`/`-up`, `scroll`, `file-drop`, `theme-changed`. Window events come from the host's subclassed WndProc; page events are DOM events forwarded through the injected bridge (`file-drop` gives `File` descriptors — name/size/type — not paths). |
 | `cdp` | The live CDP connection — escape hatch to the full DevTools protocol (Network, DOM, Input, Emulation, …) |
 | `url` | Current page URL (tracked across navigations, including page-initiated ones) |
 | `closed` / `onClosed(cb)` / `close()` | Lifecycle |

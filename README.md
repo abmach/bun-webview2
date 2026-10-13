@@ -60,15 +60,23 @@ graph TB
     H2 -- "renders" --> P2
 ```
 
-- **One host process per window.** wry/tao only supports window creation *before* its native event loop has ever been pumped — a second window from a live host deadlocks at the native level (verified empirically). One fresh process per window is the only proven creation context, and it buys per-window crash isolation: a dying window never takes your app down.
+- **One host process per window.** wry/tao only supports window creation *before* its native event loop has ever been pumped — a second window from a live host deadlocks at the native level (verified empirically). One fresh process per window is the only proven creation context, and it buys per-window crash isolation.
 - **Debug port** — the library passes `--remote-debugging-port` and the data folder to each host via the WebView2 loader environment variables (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` / `WEBVIEW2_USER_DATA_FOLDER`). All windows of an app share one WebView2 browser process and one port; each window claims its own page target.
 - **Everything else is CDP.** Navigation, evaluation, IPC, and screenshots flow over a loopback WebSocket using Bun's built-in client. No native module is loaded in your process.
+- **Window commands ride the page.** On Windows, webviewjs's "non-blocking" pump is tao's blocking `run_return()`, which sometimes never returns control to JS (verified in their `app.rs`; reproduced here). In that wedged state a host's own Bun event loop is dead — timers, sockets, stdin — so bun-webview2 never relies on it: window-control commands are CDP-evaluated as `window.ipc.postMessage(...)` in the page and delivered natively by wry to the host, which acks on stdout. Commands, acks, IPC, and events all work in both wedged and healthy hosts.
 
 ### Why all content flows through CDP (and why windows are "primed")
 
 wry's own initial-navigation path (`NativeWindow.loadUrl` / `loadHtml`) can stall the first page load for seconds on some machines. CDP-driven navigation against the exact same WebView2 process commits in ~30 ms. bun-webview2 therefore never touches the wry navigation path — `html` and `url` options are delivered via CDP, and you get the fast path for free. (Measured on the reference machine: cold start → loaded page ≈ 1 s; `evaluate` round-trip ≈ 0.5–1 ms.)
 
 Related, and also handled for you: on a never-navigated webview target, CDP commands that need a renderer (`Runtime.enable`, even `Page.navigate` itself) can wedge forever. The library sends one throwaway `about:blank` navigation before any other setup, which commits a document and makes the whole protocol deterministic.
+
+### Known limitation
+
+In a wedged host (see above), native window-event forwarding can stop after a
+CDP-driven navigation while commands and IPC keep working. The wedge is a
+webviewjs/tao Windows issue (their `run_return`-based pump); window controls
+and the page are unaffected. Avoided entirely when the host's loop is healthy.
 
 ## API
 

@@ -4,18 +4,22 @@
  * Architecture: each window is owned by a dedicated child host process
  * (src/host.ts) running @webviewjs/webview (tao + wry over the system
  * WebView2 runtime); the page inside it is driven by this process over the
- * Chrome DevTools Protocol via a loopback WebSocket. Splitting windows
- * across host processes is not a workaround for fun — wry/tao only
- * supports window creation before its native event loop has ever been
- * pumped, so one fresh process per window is the only proven creation
- * context. It also buys per-window crash isolation.
+ * Chrome DevTools Protocol via a loopback WebSocket.
  *
- * The debug port and data folder are injected through the WebView2 loader
- * environment variables (WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS /
- * WEBVIEW2_USER_DATA_FOLDER), set on the child processes before their
- * first window exists. All host children of one app share a single
- * WebView2 browser process and therefore a single port; each window
- * claims its own page target.
+ * Why one process per window: wry/tao only supports window creation before
+ * its native event loop has ever been pumped, so a second window from a
+ * live host deadlocks at the native level. Fresh process = the only proven
+ * creation context, plus per-window crash isolation.
+ *
+ * Why commands ride the page: on Windows, webviewjs's "non-blocking" pump
+ * is tao's blocking run_return(), which sometimes never returns control to
+ * JS (verified in their app.rs and reproduced here). A wedged host has a
+ * dead Bun event loop — timers, sockets, stdin are all gone — but tao
+ * still processes window messages and re-enters JS through native
+ * ThreadsafeFunction callbacks. So parent→host commands are delivered by
+ * CDP-evaluating window.ipc.postMessage(...) in the page (wry delivers it
+ * natively to the host), and host→parent events arrive on stdout, which
+ * works in both wedged and healthy states.
  */
 
 import { CdpConnection, pickFreePort, waitForPageTarget, type CdpTargetInfo } from "./cdp.ts";
@@ -27,7 +31,7 @@ export interface Webview2WindowOptions extends HardeningOptions {
   readonly height?: number;
   /** Initial URL to load. */
   readonly url?: string;
-  /** Initial inline HTML to load (delivered as a data: URL over CDP). */
+  /** Initial inline HTML to load (delivered as a data: URL). */
   readonly html?: string;
   /** Seconds to wait for a navigation's load event before rejecting. Default 30. */
   readonly navigationTimeoutSeconds?: number;
@@ -109,7 +113,7 @@ function defaultDataDir(): string {
 
 /** A live child host process owning exactly one window. */
 class WindowHost {
-  readonly #child: Bun.Subprocess<"pipe", "pipe", "inherit">;
+  readonly #child: Bun.Subprocess<"ignore", "pipe", "inherit">;
   #closed = false;
   readonly #closedWaiters: Array<() => void> = [];
   readonly #eventWaiters = new Set<(event: string, payload: unknown) => void>();
@@ -122,7 +126,7 @@ class WindowHost {
       ? [Bun.env.BWV2_HOST_EXE]
       : [process.execPath, `${import.meta.dir}/host.ts`];
     this.#child = Bun.spawn([...command, config], {
-      stdin: "pipe",
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "inherit",
       env: {
@@ -181,15 +185,6 @@ class WindowHost {
     return this.#closed;
   }
 
-  /** Fire a window-control command (JSON line on the child's stdin). */
-  invoke(op: string, ...args: unknown[]): void {
-    if (this.#closed) return;
-    this.#child.stdin.write(`${JSON.stringify({ op, args })}\n`);
-    // FileSink buffers in memory until flushed; without this the command
-    // may never reach the host
-    void this.#child.stdin.flush();
-  }
-
   kill(): void {
     if (!this.#closed) this.#child.kill();
     this.#handleClosed();
@@ -204,6 +199,8 @@ export class Webview2Window {
   #url: string | undefined;
   readonly #closedWaiters: Array<() => void> = [];
   readonly #eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
+  #nextCommandId = 1;
+  readonly #pendingAcks = new Set<number>();
   #navigationTimeoutMs: number;
 
   private constructor(host: WindowHost, cdp: CdpConnection, opts: Webview2WindowOptions) {
@@ -214,6 +211,11 @@ export class Webview2Window {
     // Events arrive as JSON from our own child process — trusted channel,
     // so one narrow cast from unknown is all the validation needed.
     host.onHostEvent((event, payload) => {
+      if (event === "ack" ) {
+        const id = typeof payload === "object" && payload !== null && "id" in payload ? payload.id : undefined;
+        if (typeof id === "number") this.#pendingAcks.delete(id);
+        return;
+      }
       if (event === "closed") return;
       this.#eventHandlers.get(event)?.forEach((handler) => handler(payload));
     });
@@ -278,6 +280,9 @@ export class Webview2Window {
     await cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: buildIpcBridgeScript() });
     await cdp.call("Runtime.addBinding", { name: "__bwv2Ipc" });
 
+    // Confirm the parent→host command channel (CDP -> page -> wry IPC -> host).
+    await win.#sendCommand("hello");
+
     if (opts.url) await win.navigate(opts.url);
     else if (opts.html) await win.setHTML(opts.html);
     return win;
@@ -308,6 +313,34 @@ export class Webview2Window {
       .catch(() => {
         // window closed mid-reply; nothing to do
       });
+  }
+
+  /**
+   * Deliver a window-control command to the host process: CDP-evaluate
+   * window.ipc.postMessage in the page; wry hands it to the host natively
+   * (the only path that survives the host's wedged event loop). The host acks
+   * on stdout; we resend until then. All ops are idempotent setters, so a
+   * duplicated delivery is harmless.
+   */
+  async #sendCommand(op: string, ...args: unknown[]): Promise<void> {
+    if (this.#closed) return;
+    const id = this.#nextCommandId++;
+    this.#pendingAcks.add(id);
+    const expression = `window.ipc.postMessage(${JSON.stringify(JSON.stringify({ id, op, args }))})`;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (this.#closed || !this.#pendingAcks.has(id)) return;
+      await this.#cdp
+        .call("Runtime.evaluate", { expression, awaitPromise: true })
+        .catch(() => {
+          // mid-navigation or window closing — next attempt may land
+        });
+      // give the host's ack a window to arrive over stdout
+      await Bun.sleep(250);
+    }
+    if (this.#pendingAcks.has(id)) {
+      console.error(`[bwv2] host command "${op}" not acknowledged after 20 attempts`);
+      this.#pendingAcks.delete(id);
+    }
   }
 
   /** Navigate to a URL. Resolves when the main frame's load event fires. */
@@ -415,44 +448,48 @@ export class Webview2Window {
     return () => handlers.delete(wrapped);
   }
 
-  // --- Native window controls (proxied to the host process) ---
+  // --- Native window controls (delivered to the host via the page) ---
+
+  /** Fire-and-forget; commands retry in the background until the host acks. */
+  #command(op: string, ...args: unknown[]): void {
+    void this.#sendCommand(op, ...args);
+  }
 
   setTitle(title: string): void {
-    this.#host.invoke("setTitle", title);
+    this.#command("setTitle", title);
   }
 
   setSize(width: number, height: number): void {
-    this.#host.invoke("setSize", width, height);
+    this.#command("setSize", width, height);
   }
 
   setPosition(x: number, y: number): void {
-    this.#host.invoke("setPosition", x, y);
+    this.#command("setPosition", x, y);
   }
 
   setDecorations(decorations: boolean): void {
-    this.#host.invoke("setDecorations", decorations);
+    this.#command("setDecorations", decorations);
   }
 
   setAlwaysOnTop(alwaysOnTop: boolean): void {
-    this.#host.invoke("setAlwaysOnTop", alwaysOnTop);
+    this.#command("setAlwaysOnTop", alwaysOnTop);
   }
 
   focus(): void {
-    this.#host.invoke("focus");
+    this.#command("focus");
   }
 
   minimize(): void {
-    this.#host.invoke("minimize");
+    this.#command("minimize");
   }
 
   maximize(): void {
-    this.#host.invoke("maximize");
+    this.#command("maximize");
   }
 
   /** Close the window, stop its host process, and detach from CDP. */
   close(): void {
     if (!this.#closed) {
-      this.#host.invoke("close");
       this.#host.kill();
       this.#handleClosed();
     }
@@ -468,9 +505,8 @@ export class Webview2Window {
     if (this.#closed) return;
     const confirmed = Promise.withResolvers<void>();
     this.onClosed(() => confirmed.resolve());
-    this.#host.invoke("close");
-    const timer = Bun.sleep(timeoutMs);
-    const winner = await Promise.race([confirmed.promise.then(() => "closed" as const), timer.then(() => "timeout" as const)]);
+    void this.#sendCommand("close");
+    const winner = await Promise.race([confirmed.promise.then(() => "closed" as const), Bun.sleep(timeoutMs).then(() => "timeout" as const)]);
     if (winner === "timeout") {
       this.#host.kill();
       this.#handleClosed();

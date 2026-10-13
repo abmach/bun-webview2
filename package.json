@@ -1,6 +1,6 @@
 {
   "name": "bun-webview2",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "main": "./src/index.ts",
   "module": "./src/index.ts",
   "devDependencies": {
@@ -11,11 +11,19 @@
     ".": "./src/index.ts"
   },
   "description": "Desktop apps with Bun: native WebView2 windows you fully control, driven over the Chrome DevTools Protocol.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitlab.com/abmach/bun-webview2.git"
+  },
+  "bugs": {
+    "url": "https://gitlab.com/abmach/bun-webview2/-/issues"
+  },
   "engines": {
     "bun": ">=1.2"
   },
   "files": [
     "src",
+    "native",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -31,8 +39,5 @@
   ],
   "license": "MIT",
   "type": "module",
-  "types": "./src/index.ts",
-  "dependencies": {
-    "@webviewjs/webview": "0.4.7"
-  }
+  "types": "./src/index.ts"
 }

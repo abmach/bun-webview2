@@ -2,6 +2,13 @@ MIT License
 
 Copyright (c) 2026 bun-webview2 contributors
 
+The bundled native/webview.dll incorporates source code from the webview
+project (https://github.com/webview/webview), Copyright (c) 2017 Serge
+Zaitsev, Copyright (c) 2022 Steffen André Langnes, licensed under the MIT
+License. The WebView2 SDK headers used to compile it are Copyright (c)
+Microsoft Corporation and are used under their license; no Microsoft code is
+redistributed in this package.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

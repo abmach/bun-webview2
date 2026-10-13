@@ -4,9 +4,6 @@
   "workspaces": {
     "": {
       "name": "bun-webview2",
-      "dependencies": {
-        "@webviewjs/webview": "0.4.7",
-      },
       "devDependencies": {
         "bun-types": "^1.4.3",
         "typescript": "^7.0.2",
@@ -55,32 +52,6 @@
     "@typescript/typescript-win32-arm64": ["@typescript/typescript-win32-arm64@7.0.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ=="],
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
-
-    "@webviewjs/webview": ["@webviewjs/webview@0.4.7", "", { "optionalDependencies": { "@webviewjs/webview-android-arm-eabi": "0.4.7", "@webviewjs/webview-android-arm64": "0.4.7", "@webviewjs/webview-darwin-arm64": "0.4.7", "@webviewjs/webview-darwin-x64": "0.4.7", "@webviewjs/webview-freebsd-x64": "0.4.7", "@webviewjs/webview-linux-arm-gnueabihf": "0.4.7", "@webviewjs/webview-linux-arm64-gnu": "0.4.7", "@webviewjs/webview-linux-ia32-gnu": "0.4.7", "@webviewjs/webview-linux-x64-gnu": "0.4.7", "@webviewjs/webview-win32-arm64-msvc": "0.4.7", "@webviewjs/webview-win32-ia32-msvc": "0.4.7", "@webviewjs/webview-win32-x64-msvc": "0.4.7" }, "bin": { "webview": "cli/index.mjs", "webviewjs": "cli/index.mjs" } }, "sha512-Olc0urFKJ96IF4T7GX2u32AQlcjJoOJq0qhQPaMqZOst/PWJ3AZlzPsnvE3q4wg1H5GVmX+vfDBtibhSo9RInQ=="],
-
-    "@webviewjs/webview-android-arm-eabi": ["@webviewjs/webview-android-arm-eabi@0.4.7", "", { "os": "android", "cpu": "arm" }, "sha512-tny3D0+uulDEfJ+3X2nDd895GA2+39GxWBEgS2mxS1l65OanwoeSRKBdRe5OA8WTzlpOSZ52hHxFCwd3fKGVag=="],
-
-    "@webviewjs/webview-android-arm64": ["@webviewjs/webview-android-arm64@0.4.7", "", { "os": "android", "cpu": "arm64" }, "sha512-gxaE1vo6mpjE0WpzyZJq2o/j2nTLfmHHxFGoz4RWOwcLkK2TX4hnlhQbltCSht8BRnD32MFs4nTZpnd4+7Ng4A=="],
-
-    "@webviewjs/webview-darwin-arm64": ["@webviewjs/webview-darwin-arm64@0.4.7", "", { "os": "darwin", "cpu": "arm64" }, "sha512-KcFbldl6yIoV4sfsS87W8C2dBoAj1DcSF8ss2Fh/JMR6svGJGN8bqCAWRI+CVQ93JmwP84JpfWb8DCaFHM5ukQ=="],
-
-    "@webviewjs/webview-darwin-x64": ["@webviewjs/webview-darwin-x64@0.4.7", "", { "os": "darwin", "cpu": "x64" }, "sha512-rY6x/8576EbaQ5nrLeN0/SHhKhIQ+ahcJIMbpNFwdCO+X7Qq0wPdJQnusgS0tV0I7kIjDQg14fxeXOnmz6hlBA=="],
-
-    "@webviewjs/webview-freebsd-x64": ["@webviewjs/webview-freebsd-x64@0.4.7", "", { "os": "freebsd", "cpu": "x64" }, "sha512-opXrlrC8DOTxWfI3+WJ8tUSKqbq7UUNaMLtNjQM4Ygx73Nb25awCkLT5qjFZfzfgEiStOVoFRRnJIOup23I/KQ=="],
-
-    "@webviewjs/webview-linux-arm-gnueabihf": ["@webviewjs/webview-linux-arm-gnueabihf@0.4.7", "", { "os": "linux", "cpu": "arm" }, "sha512-i9sF2L+7HtuUTlzLLr0MoWum7c3l/wHCMq4oLa4izxSijoyUcAbQre8WfbMevkainNE9X4AAbGxtIEcp4QXS9g=="],
-
-    "@webviewjs/webview-linux-arm64-gnu": ["@webviewjs/webview-linux-arm64-gnu@0.4.7", "", { "os": "linux", "cpu": "arm64" }, "sha512-0VbV1RJpoJ/umgzrkOH4a6zITaTt6g+dQR5vIagNqjooeNourmaRdDy0J/dthf0cE1JlP/sRS/elKKBQxJ+RbA=="],
-
-    "@webviewjs/webview-linux-ia32-gnu": ["@webviewjs/webview-linux-ia32-gnu@0.4.7", "", { "os": "linux", "cpu": "ia32" }, "sha512-TdqZ+IVLlknuEkcDc3kDOFaSEqg1jU4D4NcYBDKrZwR2eBRnuPpZkFaC1nn0B24Cv+ZybJKYonyl+GHTnxPEyQ=="],
-
-    "@webviewjs/webview-linux-x64-gnu": ["@webviewjs/webview-linux-x64-gnu@0.4.7", "", { "os": "linux", "cpu": "x64" }, "sha512-u1E4q6IeUrzf+ut00nB8Bqzdhu2ltW4mexHrjVGjutD8ArfYe4Z1YFY7f50gnZvueDA0wVNp7adfGph/3zR69A=="],
-
-    "@webviewjs/webview-win32-arm64-msvc": ["@webviewjs/webview-win32-arm64-msvc@0.4.7", "", { "os": "win32", "cpu": "arm64" }, "sha512-pHPwlThh8ZoI86aq7OIwd48kMeYRRrNRPuHeqrcqR5dKmghXv8kvAdHf3aYa+Ig3PmJawbFH4VoAUWM4uF6aGQ=="],
-
-    "@webviewjs/webview-win32-ia32-msvc": ["@webviewjs/webview-win32-ia32-msvc@0.4.7", "", { "os": "win32", "cpu": "ia32" }, "sha512-w1bmcON6qkhZ3MoFpQ48nQmKAZ/fvJcZ8xCankTJRx1HcXv4vWRvPqxQmigRCAEq09+Qu+gR++Z07t8r2THysg=="],
-
-    "@webviewjs/webview-win32-x64-msvc": ["@webviewjs/webview-win32-x64-msvc@0.4.7", "", { "os": "win32", "cpu": "x64" }, "sha512-hDI5cCpz6Tbik4SVwwAvAlnANcuUNDBHDpc5fUhVgKx73yB4uXkzhJQTZ6X1R1FO8Ks9WV+UOlEUgq0mhrdAHg=="],
 
     "bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
 

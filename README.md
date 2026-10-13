@@ -4,6 +4,8 @@ Desktop apps with Bun on Windows — native **WebView2** windows you fully contr
 
 No browser UI. No tab strip, no address bar, no Edge "App bar", no first-run nags. Your window, your icon, your process — and sub-millisecond control of the page inside it.
 
+Zero npm runtime dependencies: the window layer is the [C `webview` library](https://github.com/webview/webview) — a single ~540 KB DLL, built once with `zig c++` (no MSVC, no cmake) and driven directly through `bun:ffi`.
+
 ## Quick start
 
 ```bash
@@ -48,22 +50,23 @@ Run it with `bun run`. Close the window (or call `win.close()`) and the process 
 
 ## How it works
 
-Each window is owned by a dedicated **host process** — a tiny Bun script shipped with the library (`src/host.ts`) that creates one native window via `@webviewjs/webview` (tao + wry over the system WebView2 runtime) and nothing else. Your process drives the page over CDP:
+Each window is owned by a dedicated **host process** — a tiny Bun script shipped with the library (`src/host-ffi.ts`) that creates one native window through the C webview library via `bun:ffi` and nothing else. Your process drives the page over CDP:
 
 ```mermaid
 graph TB
-    A["Your Bun app"] -- "spawns one per window" --> H1["host process #1\n(tao + wry window)"]
-    A -- "spawns one per window" --> H2["host process #2\n(tao + wry window)"]
+    A["Your Bun app"] -- "spawns one per window" --> H1["host process #1\n(C webview lib via bun:ffi)"]
+    A -- "spawns one per window" --> H2["host process #2\n(C webview lib via bun:ffi)"]
     A -- "CDP over ws://127.0.0.1:<port>" --> P1["page target #1"]
     A -- "CDP over ws://127.0.0.1:<port>" --> P2["page target #2"]
     H1 -- "renders" --> P1
     H2 -- "renders" --> P2
 ```
 
-- **One host process per window.** wry/tao only supports window creation *before* its native event loop has ever been pumped — a second window from a live host deadlocks at the native level (verified empirically). One fresh process per window is the only proven creation context, and it buys per-window crash isolation.
+- **One host process per window** — buys per-window crash isolation: a dying window never takes your app down.
 - **Debug port** — the library passes `--remote-debugging-port` and the data folder to each host via the WebView2 loader environment variables (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` / `WEBVIEW2_USER_DATA_FOLDER`). All windows of an app share one WebView2 browser process and one port; each window claims its own page target.
 - **Everything else is CDP.** Navigation, evaluation, IPC, and screenshots flow over a loopback WebSocket using Bun's built-in client. No native module is loaded in your process.
-- **Window commands ride the page.** On Windows, webviewjs's "non-blocking" pump is tao's blocking `run_return()`, which sometimes never returns control to JS (verified in their `app.rs`; reproduced here). In that wedged state a host's own Bun event loop is dead — timers, sockets, stdin — so bun-webview2 never relies on it: window-control commands are CDP-evaluated as `window.ipc.postMessage(...)` in the page and delivered natively by wry to the host, which acks on stdout. Commands, acks, IPC, and events all work in both wedged and healthy hosts.
+- **Window commands ride the page.** The host's only JS runs re-entrantly inside `webview_run` — the C library's plain Win32 `GetMessage` pump, so there is no JS event loop to lose at all. Commands are CDP-evaluated as `bwv2_host_cmd(...)` in the page; the C library delivers them to the host's bind callback natively, and `webview_return` resolves the page-side promise the parent awaits — a resolved call IS the delivery confirmation. (This design came from a hard lesson: the previous wry/tao-based host's "non-blocking" pump could freeze the whole JS event loop; the C library has no loop to freeze.)
+- **Window events are polled over the command channel.** The flat C API has no event subscriptions, so resize/move events are synthesized by polling window geometry (`queryState` → `GetClientRect`) at 5 Hz while anyone listens. Keyboard/mouse/file-drop events are not currently forwarded.
 
 ### Why all content flows through CDP (and why windows are "primed")
 
@@ -98,7 +101,7 @@ Related, and also handled for you: on a never-navigated webview target, CDP comm
 | `evaluate<T>(expression)` | Evaluate an expression in the page; promises awaited; result JSON round-tripped |
 | `expose(name, fn)` | Expose a Bun function to the page as `await window.bwv2.call(name, ...args)` |
 | `screenshot({ format, quality })` | Capture the viewport as a PNG/JPEG `Blob` |
-| `on(event, handler)` | Native window events, typed: `move`, `resize`, `focus`, `blur`, `key-down`, `key-up`, `mouse-*`, `scroll`, `file-drop` (drag & drop), `file-hover`, `theme-changed` |
+| `on(event, handler)` | Native window events, typed: currently `resize` and `move` (client-size semantics; synthesized from window geometry at 5 Hz while listeners exist). Keyboard/mouse/file-drop events are not yet forwarded. |
 | `cdp` | The live CDP connection — escape hatch to the full DevTools protocol (Network, DOM, Input, Emulation, …) |
 | `url` | Current page URL (tracked across navigations, including page-initiated ones) |
 | `closed` / `onClosed(cb)` / `close()` | Lifecycle |
@@ -155,10 +158,10 @@ route "new window" to the running instance instead of spawning again.
 - Each window spawns a host process. In development that's `bun` running the library's `src/host.ts`; your machine needs Bun on the PATH-compatible `process.execPath`.
 - For `bun build --compile` executables, compile the host separately and point the `BWV2_HOST_EXE` environment variable at it:
   ```bash
-  bun build --compile --minify src/host.ts --outfile host.exe   # inside node_modules: copy out first
+  bun build --compile --minify src/host-ffi.ts --outfile host.exe   # inside node_modules: copy out first
   BWV2_HOST_EXE=./host.exe ./your-app.exe
   ```
-- Native `.node` modules (`@webviewjs/webview`'s binaries) currently ship **alongside** binaries rather than inside them — keep them next to the host.
+- `native/webview.dll` (and the host script, unless compiled) must ship **alongside** your binary — `bun build --compile` embeds neither.
 - Give the exe a custom icon with [rcedit](https://github.com/electron/rcedit); the window inherits the process icon.
 - WebView2 writes its user-data folder per app; if you need to control where (e.g. Program Files installs), patch `userDataFolder` at the window layer.
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-10-13
+
+- Window layer replaced: hosts now drive the [C `webview` library](https://github.com/webview/webview) through `bun:ffi` — zero npm runtime dependencies. The DLL (~540 KB) is built once with `zig c++` (no MSVC, no cmake); sources and pinned WebView2 SDK headers live in the build workspace.
+- Command channel: `bwv2_host_cmd` bound via `webview_bind`; the host replies through `webview_return`, so the page-side promise the parent awaits resolves exactly when the host applies the command — no separate ack protocol. All host JS runs re-entrantly inside `webview_run`'s native Win32 loop; there is no JS event loop to wedge.
+- Window controls (decorations, always-on-top, position, min/max, focus) via FFI'd user32 on the webview's HWND.
+- resize/move events synthesized by polling window geometry over the command channel at 5 Hz while listeners exist (client-size semantics, matching tao's events). Keyboard/mouse/file-drop events are not currently forwarded.
+- Parents kill their host children on exit (no orphaned hosts wedging the shared browser for the data folder).
+- Why the switch: the wry/tao host's Windows "non-blocking" pump (`run_return`) could freeze a host's entire JS event loop (verified upstream, root cause in webviewjs's `app.rs`), requiring three workarounds (page-relay commands, stdout acks, resend-until-ack). The C library has no JS loop at all, eliminating the failure class.
+
 ## 0.2.1 — 2026-10-12
 
 - Window commands no longer depend on the host process's JS event loop. On Windows, webviewjs's pump is tao's blocking `run_return()`, which can freeze a host's whole Bun loop (timers, sockets, stdin). Commands now ride the page: `window.ipc.postMessage(...)` via CDP, delivered natively by wry, acked on stdout — immune to the wedge. (stdin and TCP control channels both proved unreliable and were removed.)

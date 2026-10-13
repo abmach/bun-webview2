@@ -98,10 +98,25 @@ interface FrameNavigatedParams {
   readonly frame?: { readonly parentId?: string; readonly url?: string };
 }
 
+/** Geometry reported by the host's queryState command. */
+interface HostWindowState {
+  readonly width: number;
+  readonly height: number;
+  readonly x: number;
+  readonly y: number;
+}
+
 /** Module-level: one WebView2 browser process per app, hence one port and one data folder. */
 let activePort: number | undefined;
 let activeDataDir: string | undefined;
 const claimedTargets = new Set<string>();
+const liveHosts = new Set<WindowHost>();
+
+// A dying app must not orphan host processes: a lingering host holds the
+// shared WebView2 browser for the data folder, wedging the next run.
+process.on("exit", () => {
+  for (const host of liveHosts) host.kill();
+});
 
 /** Per-app WebView2 data folder: without this, every Bun process on the
  * machine would share one browser process keyed to bun.exe. */
@@ -122,9 +137,10 @@ class WindowHost {
     const config = JSON.stringify(options);
     // Compiled executables re-run themselves instead of acting as a runtime,
     // so shipped apps point BWV2_HOST_EXE at a pre-compiled host binary.
+    // host-ffi.ts drives the C webview library directly via bun:ffi.
     const command = Bun.env.BWV2_HOST_EXE
       ? [Bun.env.BWV2_HOST_EXE]
-      : [process.execPath, `${import.meta.dir}/host.ts`];
+      : [process.execPath, `${import.meta.dir}/host-ffi.ts`];
     this.#child = Bun.spawn([...command, config], {
       stdin: "ignore",
       stdout: "pipe",
@@ -138,6 +154,7 @@ class WindowHost {
     this.#watchStdout();
     // host death closes the window, whatever the cause
     void this.#child.exited.then(() => this.#handleClosed());
+    liveHosts.add(this);
   }
 
   async #watchStdout(): Promise<void> {
@@ -175,6 +192,7 @@ class WindowHost {
   #handleClosed(): void {
     if (this.#closed) return;
     this.#closed = true;
+    liveHosts.delete(this);
     for (const notify of this.#closedWaiters) notify();
   }
 
@@ -207,9 +225,9 @@ export class Webview2Window {
   #url: string | undefined;
   readonly #closedWaiters: Array<() => void> = [];
   readonly #eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
-  #nextCommandId = 1;
-  readonly #pendingAcks = new Set<number>();
   #navigationTimeoutMs: number;
+  #statePoller: Timer | undefined;
+  #lastState: HostWindowState | undefined;
 
   private constructor(host: WindowHost, cdp: CdpConnection, opts: Webview2WindowOptions) {
     this.#host = host;
@@ -219,11 +237,6 @@ export class Webview2Window {
     // Events arrive as JSON from our own child process — trusted channel,
     // so one narrow cast from unknown is all the validation needed.
     host.onHostEvent((event, payload) => {
-      if (event === "ack" ) {
-        const id = typeof payload === "object" && payload !== null && "id" in payload ? payload.id : undefined;
-        if (typeof id === "number") this.#pendingAcks.delete(id);
-        return;
-      }
       if (event === "closed") return;
       this.#eventHandlers.get(event)?.forEach((handler) => handler(payload));
     });
@@ -241,6 +254,7 @@ export class Webview2Window {
     this.#closed = true;
     this.#cdp.close();
     for (const notify of this.#closedWaiters) notify();
+    this.#stopStatePolling();
   }
 
   /**
@@ -288,7 +302,7 @@ export class Webview2Window {
     await cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: buildIpcBridgeScript() });
     await cdp.call("Runtime.addBinding", { name: "__bwv2Ipc" });
 
-    // Confirm the parent→host command channel (CDP -> page -> wry IPC -> host).
+    // Confirm the parent→host command channel (CDP -> page -> bind -> host).
     await win.#sendCommand("hello");
 
     if (opts.url) await win.navigate(opts.url);
@@ -324,31 +338,32 @@ export class Webview2Window {
   }
 
   /**
-   * Deliver a window-control command to the host process: CDP-evaluate
-   * window.ipc.postMessage in the page; wry hands it to the host natively
-   * (the only path that survives the host's wedged event loop). The host acks
-   * on stdout; we resend until then. All ops are idempotent setters, so a
-   * duplicated delivery is harmless.
+   * Deliver a window-control command to the host process and return its
+   * reply: CDP-evaluate the bound bwv2_host_cmd in the page; the C webview
+   * library hands it to the host natively (all host JS runs re-entrantly
+   * inside webview_run, so nothing here depends on a JS event loop), and
+   * webview_return resolves the page-side promise the parent awaits — the
+   * resolved call IS the delivery confirmation. Commands are resent on
+   * failure (mid-navigation); ops are idempotent setters.
    */
-  async #sendCommand(op: string, ...args: unknown[]): Promise<void> {
+  async #sendCommand(op: string, ...args: unknown[]): Promise<unknown> {
     if (this.#closed) return;
-    const id = this.#nextCommandId++;
-    this.#pendingAcks.add(id);
-    const expression = `window.ipc.postMessage(${JSON.stringify(JSON.stringify({ id, op, args }))})`;
+    const expression = `bwv2_host_cmd(${JSON.stringify(JSON.stringify({ op, args }))})`;
     for (let attempt = 0; attempt < 20; attempt++) {
-      if (this.#closed || !this.#pendingAcks.has(id)) return;
-      await this.#cdp
-        .call("Runtime.evaluate", { expression, awaitPromise: true })
-        .catch(() => {
-          // mid-navigation or window closing — next attempt may land
-        });
-      // give the host's ack a window to arrive over stdout
-      await Bun.sleep(250);
+      if (this.#closed) return;
+      try {
+        const response = (await this.#cdp.call("Runtime.evaluate", {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+        })) as EvaluateResult;
+        return response.result?.value;
+      } catch {
+        // mid-navigation or window closing — next attempt may land
+      }
+      await Bun.sleep(100);
     }
-    if (this.#pendingAcks.has(id)) {
-      console.error(`[bwv2] host command "${op}" not acknowledged after 20 attempts`);
-      this.#pendingAcks.delete(id);
-    }
+    console.error(`[bwv2] host command "${op}" never resolved after 20 attempts`);
   }
 
   /** Navigate to a URL. Resolves when the main frame's load event fires. */
@@ -453,12 +468,80 @@ export class Webview2Window {
     const wrapped = handler as unknown as (payload: unknown) => void;
     handlers.add(wrapped);
     this.#eventHandlers.set(event, handlers);
-    return () => handlers.delete(wrapped);
+    if (event === "resize" || event === "move") this.#startStatePolling();
+    return () => {
+      handlers.delete(wrapped);
+      if (
+        (event === "resize" || event === "move") &&
+        (this.#eventHandlers.get("resize")?.size ?? 0) === 0 &&
+        (this.#eventHandlers.get("move")?.size ?? 0) === 0
+      ) {
+        this.#stopStatePolling();
+      }
+    };
+  }
+
+  /**
+   * Poll-based resize/move synthesis: the C webview library's flat API has
+   * no event subscriptions, so geometry is queried over the command channel
+   * (which runs entirely on the native loop — immune to every JS-loop
+   * failure mode) while anyone listens for resize/move.
+   */
+  #startStatePolling(): void {
+    if (this.#statePoller !== undefined || this.#closed) return;
+    const dbg = Bun.env.BWV2_DEBUG === "1";
+    // An immediate first query pins the baseline BEFORE any subsequent
+    // setSize: CDP commands are serialized, so this snapshot is guaranteed
+    // to precede any resize command issued after subscription.
+    void this.#sendCommand("queryState").then((state) => {
+      if (dbg) console.error(`[bwv2] poll baseline: ${JSON.stringify(state)}`);
+      if (state !== null && typeof state === "object") {
+        const source = state as Partial<HostWindowState>;
+        if (
+          typeof source.width === "number" && typeof source.height === "number" &&
+          typeof source.x === "number" && typeof source.y === "number"
+        ) {
+          this.#onStatePolled({ width: source.width, height: source.height, x: source.x, y: source.y });
+        }
+      }
+    });
+    this.#statePoller = setInterval(() => {
+      void this.#sendCommand("queryState").then((state) => {
+        if (dbg) console.error(`[bwv2] poll tick: ${JSON.stringify(state)}`);
+        if (state === null || typeof state !== "object") return;
+        const source = state as Partial<HostWindowState>;
+        if (
+          typeof source.width === "number" && typeof source.height === "number" &&
+          typeof source.x === "number" && typeof source.y === "number"
+        ) {
+          this.#onStatePolled({ width: source.width, height: source.height, x: source.x, y: source.y });
+        }
+      });
+    }, 200);
+  }
+
+  #stopStatePolling(): void {
+    if (this.#statePoller !== undefined) {
+      clearInterval(this.#statePoller);
+      this.#statePoller = undefined;
+    }
+  }
+
+  #onStatePolled(state: HostWindowState): void {
+    const previous = this.#lastState;
+    this.#lastState = state;
+    if (previous === undefined) return;
+    if (previous.width !== state.width || previous.height !== state.height) {
+      this.#eventHandlers.get("resize")?.forEach((handler) => handler({ width: state.width, height: state.height }));
+    }
+    if (previous.x !== state.x || previous.y !== state.y) {
+      this.#eventHandlers.get("move")?.forEach((handler) => handler({ x: state.x, y: state.y }));
+    }
   }
 
   // --- Native window controls (delivered to the host via the page) ---
 
-  /** Fire-and-forget; commands retry in the background until the host acks. */
+  /** Fire-and-forget; commands retry in the background until the call resolves. */
   #command(op: string, ...args: unknown[]): void {
     void this.#sendCommand(op, ...args);
   }

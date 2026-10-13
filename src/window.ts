@@ -185,6 +185,9 @@ class WindowHost {
   invoke(op: string, ...args: unknown[]): void {
     if (this.#closed) return;
     this.#child.stdin.write(`${JSON.stringify({ op, args })}\n`);
+    // FileSink buffers in memory until flushed; without this the command
+    // may never reach the host
+    void this.#child.stdin.flush();
   }
 
   kill(): void {

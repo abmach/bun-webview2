@@ -93,6 +93,7 @@ process.exit(0);
 
 function applyCommand(command: HostCommand): void {
   const args = command.args ?? [];
+  if (Bun.env.BWV2_DEBUG === "1") console.error(`[host] op: ${command.op}`);
   switch (command.op) {
     case "setTitle":
       win.setTitle(String(args[0]));

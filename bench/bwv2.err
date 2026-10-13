@@ -1,0 +1,11 @@
+469 |     const timer = Bun.sleep(timeoutMs);
+470 |     const winner = await Promise.race([confirmed.promise.then(() => "closed" as const), timer.then(() => "timeout" as const)]);
+471 |     if (winner === "timeout") {
+472 |       this.#host.kill();
+473 |       this.#handleClosed();
+474 |       throw new Error("bun-webview2: host did not confirm close in time; window force-closed");
+                      ^
+error: bun-webview2: host did not confirm close in time; window force-closed
+      at closeGracefully (D:\Personal\bun-webview2\src\window.ts:474:17)
+
+Bun v1.4.2 (Windows x64)

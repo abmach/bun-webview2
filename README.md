@@ -102,6 +102,7 @@ Related, and also handled for you: on a never-navigated webview target, CDP comm
 | `expose(name, fn)` | Expose a Bun function to the page as `await window.bwv2.call(name, ...args)` |
 | `screenshot({ format, quality })` | Capture the viewport as a PNG/JPEG `Blob` |
 | `on(event, handler)` | Typed window + page events: `move`, `resize`, `focus`, `blur`, `key-down`, `key-up`, `mouse-enter`/`-leave`/`-down`/`-up`, `scroll`, `file-drop`, `theme-changed`. Window events come from the host's subclassed WndProc; page events are DOM events forwarded through the injected bridge (`file-drop` gives `File` descriptors — name/size/type — not paths). |
+| | Nuances: `mouse-enter`/`-leave` fire on document-boundary crossings (the page surface); `file-drop` fires on the completed drop, not while hovering. |
 | `cdp` | The live CDP connection — escape hatch to the full DevTools protocol (Network, DOM, Input, Emulation, …) |
 | `url` | Current page URL (tracked across navigations, including page-initiated ones) |
 | `closed` / `onClosed(cb)` / `close()` | Lifecycle |

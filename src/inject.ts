@@ -100,8 +100,9 @@ export function buildPageEventsScript(): string {
   document.addEventListener('mouseleave', () => send('mouse-leave', {}), true);
   document.addEventListener('wheel', (e) =>
     send('scroll', { deltaX: e.deltaX, deltaY: e.deltaY }), { capture: true, passive: true });
-  // drag-and-drop: prevent the browser default and forward the files
-  document.addEventListener('dragover', (e) => { e.preventDefault(); send('file-drop', { hover: true }); }, true);
+  // drag-and-drop: the dragover preventDefault is what allows drops at all;
+  // no event is sent while hovering (it would fire dozens of times per second)
+  document.addEventListener('dragover', (e) => e.preventDefault(), true);
   document.addEventListener('drop', (e) => {
     e.preventDefault();
     const files = [...(e.dataTransfer?.files ?? [])].map((f) => ({ name: f.name, size: f.size, type: f.type }));

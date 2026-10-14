@@ -33,6 +33,8 @@ export interface Webview2WindowOptions extends HardeningOptions {
   readonly minWidth?: number;
   /** @see minWidth */
   readonly minHeight?: number;
+  /** Path to an .ico file shown as the window/taskbar icon. The runner owns the HWND, so it applies it there. */
+  readonly icon?: string;
   /** Initial URL to load. */
   readonly url?: string;
   /** Initial inline HTML to load (delivered as a data: URL). */
@@ -128,21 +130,30 @@ class WindowHost {
   readonly #eventWaiters = new Set<(event: string, payload: unknown) => void>();
 
   constructor(
-    readonly options: { title: string; width: number; height: number; minWidth?: number; minHeight?: number },
+    readonly options: {
+      title: string;
+      width: number;
+      height: number;
+      minWidth?: number;
+      minHeight?: number;
+      icon?: string;
+    },
   ) {
     const config = JSON.stringify(options);
-    // Compiled executables re-run themselves instead of acting as a runtime,
-    // so shipped apps point BWV2_HOST_EXE at a pre-compiled host binary.
-    // host-ffi.ts drives the C webview library directly via bun:ffi.
+    // The runner is a plain native executable: after the 2026-10-14 Windows
+    // security updates, WebView2 environment creation faults inside bun.exe
+    // processes (any thread, any loader mode) while native executables work.
+    // Shipped apps can point BWV2_HOST_EXE at their own runner build.
     const command = Bun.env.BWV2_HOST_EXE
       ? [Bun.env.BWV2_HOST_EXE]
-      : [process.execPath, `${import.meta.dir}/host-ffi.ts`];
+      : [`${import.meta.dir}/../native/runner.exe`];
     this.#child = Bun.spawn([...command, config], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "inherit",
       env: {
         ...Bun.env,
+        // runner.exe resolves WebView2Loader.dll from its own directory
         WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${activePort}`,
         WEBVIEW2_USER_DATA_FOLDER: activeDataDir,
       },
@@ -278,6 +289,7 @@ export class Webview2Window {
       height: opts.height ?? 600,
       minWidth: opts.minWidth,
       minHeight: opts.minHeight,
+      icon: opts.icon,
     });
 
     const target: CdpTargetInfo = await waitForPageTarget(activePort, claimedTargets, 15_000, activeDataDir);

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-10-14
+
+- **The window host is now a native executable.** After the 2026-10-14 Windows security updates, WebView2 environment creation faults at address 0x0 inside `EmbeddedBrowserWebView.dll` when hosted by `bun.exe` — any thread, any loader mode — while plain native executables work (verified by differential testing: C# WinForms ✅, plain C++ statically linked ✅, plain C++ via `LoadLibrary` ✅, Bun ❌). The host (`src/host-ffi.ts`, a Bun process driving the C library via `bun:ffi`) is replaced by `native/runner.exe`: a ~250-line C++ executable compiled with `zig c++` against the vendored webview library.
+- The runner owns the window, the Win32 message loop, the WndProc subclass, and the native command handler; events flow as JSON lines on stdout. `src/host-ffi.ts` and `native/webview.dll` are gone — the runner statically links the C library. `native/` now ships `runner.exe`, `WebView2Loader.dll`, and the `runner.cc` source (build command in its header).
+- Vendored C library patches, required for the updated OS/runtime combo: a real `ICoreWebView2EnvironmentOptions` object (null options fault after the update; the object must also report a `TargetCompatibleBrowserVersion`, e.g. the SDK's, or the runtime rejects creation with `E_INVALIDARG`), and the standalone WebView2 runtime (`EdgeWebView\Application`) preferred over the Edge channel's stale copy when the user hasn't chosen one explicitly.
+- Public API unchanged: verify 21/21. Benchmarks: cold start ~0.85–0.9 s, evaluate ~0.8 ms, IPC ~0.75 ms, navigation ~140 ms — same class as the previous architecture, and the runner process is ~4 MB instead of a ~40 MB Bun child per window.
+- `icon` window option: path to an `.ico` file, applied by the runner via `WM_SETICON` + class icon + an AppUserModelID derived from the title (taskbar groups/labels your app, not "runner"). The window belongs to the runner process, so application icons must be set this way — `rcedit` on your own exe no longer reaches the window.
+
 ## 0.3.1 — 2026-10-13
 
 - `minWidth`/`minHeight` window options: minimum window size in client

@@ -4,7 +4,7 @@ Desktop apps with Bun on Windows — native **WebView2** windows you fully contr
 
 No browser UI. No tab strip, no address bar, no Edge "App bar", no first-run nags. Your window, your icon, your process — and sub-millisecond control of the page inside it.
 
-Zero npm runtime dependencies: the window layer is the [C `webview` library](https://github.com/webview/webview) — a single ~540 KB DLL, built once with `zig c++` (no MSVC, no cmake) and driven directly through `bun:ffi`.
+Zero npm runtime dependencies: the window layer is the [C `webview` library](https://github.com/webview/webview) compiled into a ~1 MB native runner, built once with `zig c++` (no MSVC, no cmake).
 
 ## Quick start
 
@@ -50,23 +50,23 @@ Run it with `bun run`. Close the window (or call `win.close()`) and the process 
 
 ## How it works
 
-Each window is owned by a dedicated **host process** — a tiny Bun script shipped with the library (`src/host-ffi.ts`) that creates one native window through the C webview library via `bun:ffi` and nothing else. Your process drives the page over CDP:
+Each window is owned by a dedicated **host process** — `runner.exe`, a ~250-line native executable shipped with the library that creates one window through the C webview library and nothing else. Your process drives the page over CDP:
 
 ```mermaid
 graph TB
-    A["Your Bun app"] -- "spawns one per window" --> H1["host process #1\n(C webview lib via bun:ffi)"]
-    A -- "spawns one per window" --> H2["host process #2\n(C webview lib via bun:ffi)"]
+    A["Your Bun app"] -- "spawns one per window" --> H1["runner.exe #1\n(native, owns the message loop)"]
+    A -- "spawns one per window" --> H2["runner.exe #2\n(native, owns the message loop)"]
     A -- "CDP over ws://127.0.0.1:<port>" --> P1["page target #1"]
     A -- "CDP over ws://127.0.0.1:<port>" --> P2["page target #2"]
     H1 -- "renders" --> P1
     H2 -- "renders" --> P2
 ```
 
-- **One host process per window** — buys per-window crash isolation: a dying window never takes your app down.
+- **One native runner per window** — `runner.exe` (C++, ~1 MB, built with `zig c++`) owns the window and the Win32 message loop. Per-window crash isolation: a dying window never takes your app down. Native by necessity: after the 2026-10-14 Windows security updates, WebView2 environment creation faults inside `bun.exe` processes (any thread, any loader mode) while plain native executables work — verified by differential testing.
 - **Debug port** — the library passes `--remote-debugging-port` and the data folder to each host via the WebView2 loader environment variables (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` / `WEBVIEW2_USER_DATA_FOLDER`). All windows of an app share one WebView2 browser process and one port; each window claims its own page target.
 - **Everything else is CDP.** Navigation, evaluation, IPC, and screenshots flow over a loopback WebSocket using Bun's built-in client. No native module is loaded in your process.
-- **Window commands ride the page.** The host's only JS runs re-entrantly inside `webview_run` — the C library's plain Win32 `GetMessage` pump, so there is no JS event loop to lose at all. Commands are CDP-evaluated as `bwv2_host_cmd(...)` in the page; the C library delivers them to the host's bind callback natively, and `webview_return` resolves the page-side promise the parent awaits — a resolved call IS the delivery confirmation. (This design came from a hard lesson: the previous wry/tao-based host's "non-blocking" pump could freeze the whole JS event loop; the C library has no loop to freeze.)
-- **Events are split by layer.** Window-level events (`move`, `resize`, `focus`/`blur` via `WM_ACTIVATE`, `theme-changed`) are forwarded from the host's subclassed window procedure. Page-surface events (`key-down`/`key-up`, `mouse-*`, `scroll`, `file-drop`) are captured as DOM events by an injected bridge and forwarded over the existing CDP binding — richer than Win32 could report (layout-aware `key`/`code`, readable `File` objects on drop) and working everywhere input actually lands, including cross-origin documents.
+- **Window commands ride the page.** Commands are CDP-evaluated as `bwv2_host_cmd(...)` in the page; the C library delivers them to the runner's native bind callback, and `webview_return` resolves the page-side promise the parent awaits — a resolved call IS the delivery confirmation. The message loop lives in pure native code: no JS event loop exists in the window-owning process at all, so neither the wry/tao pump freeze (the original architecture's failure mode) nor the Bun-process incompatibility can occur.
+- **Events are split by layer.** Window-level events (`move`, `resize`, `focus`/`blur` via `WM_ACTIVATE`, `theme-changed`) are forwarded from the runner's subclassed window procedure over stdout. Page-surface events (`key-down`/`key-up`, `mouse-*`, `scroll`, `file-drop`) are captured as DOM events by an injected bridge and forwarded over the existing CDP binding — richer than Win32 could report (layout-aware `key`/`code`, readable `File` objects on drop) and working everywhere input actually lands, including cross-origin documents.
 
 ### Why all content flows through CDP (and why windows are "primed")
 
@@ -85,6 +85,7 @@ Related, and also handled for you: on a never-navigated webview target, CDP comm
 | `title` | `string` | `"bun-webview2"` | Window title |
 | `width` / `height` | `number` | `800` / `600` | Initial window size |
 | `minWidth` / `minHeight` | `number` | — | Minimum window size (client coordinates); enforced on drags and `setSize` alike. Both must be set together. |
+| `icon` | `string` | — | Path to an `.ico` file for the window/taskbar icon. The runner (which owns the window) applies it along with an AppUserModelID derived from the title, so taskbar entries group and label as your app. |
 | `url` | `string` | — | Initial URL to load |
 | `html` | `string` | — | Initial inline HTML (loaded as a `data:` URL) |
 | `contextMenu` | `boolean` | `false` | Allow the native Chromium right-click menu (blocked by default) |
@@ -157,19 +158,14 @@ route "new window" to the running instance instead of spawning again.
 
 ## Distribution
 
-- Each window spawns a host process. In development that's `bun` running the library's `src/host.ts`; your machine needs Bun on the PATH-compatible `process.execPath`.
-- For `bun build --compile` executables, compile the host separately and point the `BWV2_HOST_EXE` environment variable at it:
-  ```bash
-  bun build --compile --minify src/host-ffi.ts --outfile host.exe   # inside node_modules: copy out first
-  BWV2_HOST_EXE=./host.exe ./your-app.exe
-  ```
-- `native/webview.dll` (and the host script, unless compiled) must ship **alongside** your binary — `bun build --compile` embeds neither.
-- Give the exe a custom icon with [rcedit](https://github.com/electron/rcedit); the window inherits the process icon.
+- Each window spawns `runner.exe` from the package's `native/` directory. End-user machines need only the WebView2 runtime (preinstalled on Windows 11 and current Windows 10).
+- `native/runner.exe` and `native/WebView2Loader.dll` must ship **alongside** your binary — `bun build --compile` embeds neither. For custom builds, compile `native/runner.cc` yourself (the build command is in its header comment) and point `BWV2_HOST_EXE` at it.
+- Give the app a custom icon with the `icon` option — the window belongs to the runner process, so `rcedit`-ing your own exe does not reach it.
 - WebView2 writes its user-data folder per app; if you need to control where (e.g. Program Files installs), patch `userDataFolder` at the window layer.
 
 ## Costs, honestly
 
-- Every window costs one Bun process (~40 MB) plus its share of the shared WebView2 browser tree. For 1–3 windows this is desktop-app normal.
+- Every window costs one native runner process (~4 MB) plus its share of the shared WebView2 browser tree. For 1–3 windows this is desktop-app normal.
 - One WebView2 browser process per app means one app instance at a time (see the data-folder section above).
 - The CDP debug port is a local-loopback control channel: fine for desktop apps, not for hostile multi-user machines (see security notes).
 

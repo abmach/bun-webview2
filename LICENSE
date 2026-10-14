@@ -2,7 +2,7 @@ MIT License
 
 Copyright (c) 2026 bun-webview2 contributors
 
-The bundled native/webview.dll incorporates source code from the webview
+The bundled native/runner.exe statically incorporates source code from the webview
 project (https://github.com/webview/webview), Copyright (c) 2017 Serge
 Zaitsev, Copyright (c) 2022 Steffen André Langnes, licensed under the MIT
 License. The WebView2 SDK headers used to compile it are Copyright (c)

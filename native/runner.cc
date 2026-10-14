@@ -245,7 +245,8 @@ bool apply_icon(const std::string &icon_path, const std::string &app_name) {
         c = L'_';
       }
     }
-    SetPropW(g_hwnd, L"System.AppUserModel.ID", reinterpret_cast<HANDLE>(GlobalAddAtomW(aumid.c_str())));
+    // the shell reads AUMID from the property store — the only mechanism
+    // that matters; SetPropW would be a no-op that leaks a global atom
     IPropertyStore *store = nullptr;
     auto hwnd_ptr = static_cast<HWND>(g_hwnd);
     if (SUCCEEDED(SHGetPropertyStoreForWindow(hwnd_ptr, IID_IPropertyStore,

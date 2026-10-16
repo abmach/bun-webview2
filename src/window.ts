@@ -22,6 +22,7 @@
  * works in both wedged and healthy states.
  */
 
+import { resolve } from "node:path";
 import { CdpConnection, pickFreePort, waitForPageTarget, type CdpTargetInfo } from "./cdp.ts";
 import { buildHardeningScript, buildIpcBridgeScript, buildPageEventsScript, type HardeningOptions } from "./inject.ts";
 
@@ -268,7 +269,10 @@ export class Webview2Window {
   static async create(opts: Webview2WindowOptions = {}): Promise<Webview2Window> {
     if (activePort === undefined) {
       const port = opts.port ?? (await pickFreePort());
-      activeDataDir = opts.dataDir ?? defaultDataDir();
+      // relative dataDir must resolve against the APP's cwd: the WebView2
+      // loader resolves relative paths in the env var against the runner
+      // exe's location (node_modules/.../native/), not the working directory
+      activeDataDir = resolve(opts.dataDir ?? defaultDataDir());
       activePort = port;
     } else if (opts.port !== undefined && opts.port !== activePort) {
       throw new Error(

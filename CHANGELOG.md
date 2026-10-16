@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2 — 2026-10-15
+
+- Relative `dataDir` now resolves against the app's working directory. Previously a relative path reached the WebView2 loader unresolved, which placed browser data inside the package's `native/` directory instead of where the app author pointed it.
+
 ## 0.4.1 — 2026-10-15
 
 - Release tooling: `.gitlab-ci.yml` — on version tags, the pipeline validates the tag against `package.json`, dry-runs the pack, and runs `npm stage publish` authenticated via GitLab OIDC trusted publishing (no npm tokens in CI).

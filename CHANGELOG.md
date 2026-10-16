@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-10-15
+
+- Release tooling: `.gitlab-ci.yml` — on version tags, the pipeline validates the tag against `package.json`, dry-runs the pack, and runs `npm stage publish` authenticated via GitLab OIDC trusted publishing (no npm tokens in CI).
+- `.gitattributes` (`text=auto eol=lf`, native binaries marked binary) for consistent Windows checkouts.
+- No runtime changes.
+
 ## 0.4.0 — 2026-10-14
 
 - **The window host is now a native executable.** After the 2026-10-14 Windows security updates, WebView2 environment creation faults at address 0x0 inside `EmbeddedBrowserWebView.dll` when hosted by `bun.exe` — any thread, any loader mode — while plain native executables work (verified by differential testing: C# WinForms ✅, plain C++ statically linked ✅, plain C++ via `LoadLibrary` ✅, Bun ❌). The host (`src/host-ffi.ts`, a Bun process driving the C library via `bun:ffi`) is replaced by `native/runner.exe`: a ~250-line C++ executable compiled with `zig c++` against the vendored webview library.

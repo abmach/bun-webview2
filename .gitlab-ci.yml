@@ -1,0 +1,40 @@
+# Publishes to npm's staging area via trusted publishing (OIDC) when a version
+# tag is pushed. No npm tokens in CI: GitLab generates a short-lived OIDC token
+# that the npm CLI (>= 11.5.1) exchanges for a publish credential.
+#
+# Trusted publisher on npmjs.com must be configured as:
+#   Namespace:     abmach
+#   Project name:  bun-webview2
+#   CI file path:  .gitlab-ci.yml
+#   Environment:   (empty — or add `environment: name: <the-name>` to the job)
+#
+# Release flow: bump package.json + CHANGELOG, commit, tag (v0.X.Y), push tag.
+# The staged publish then waits for your review on npmjs.com, as with manual
+# `npm stage publish`.
+
+stages:
+  - publish
+
+npm-stage-publish:
+  stage: publish
+  image: node:24
+  id_tokens:
+    NPM_ID_TOKEN:
+      aud: "npm:registry.npmjs.org"
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+$/
+  script:
+    # the tag must match package.json — prevents publishing a mismatched version
+    - |
+      PKG_VERSION=$(node -p "require('./package.json').version")
+      TAG_VERSION="${CI_COMMIT_TAG#v}"
+      if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+        echo "package.json version $PKG_VERSION does not match tag $CI_COMMIT_TAG" >&2
+        exit 1
+      fi
+    # no install/build needed: the package ships committed sources and
+    # prebuilt native/ binaries, and has zero runtime dependencies
+    - npm publish --dry-run
+    - npm stage publish

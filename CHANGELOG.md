@@ -2,6 +2,10 @@
 
 ## 0.4.2 — 2026-10-15
 
+### 0.4.2 hotfix (same tag)
+
+- The second-window dataDir guard compares resolved paths (`resolve(opts.dataDir) !== activeDataDir`): passing the same relative dataDir to multiple windows no longer throws a spurious "different data folder" error.
+
 - Relative `dataDir` now resolves against the app's working directory. Previously a relative path reached the WebView2 loader unresolved, which placed browser data inside the package's `native/` directory instead of where the app author pointed it.
 
 ## 0.4.1 — 2026-10-15

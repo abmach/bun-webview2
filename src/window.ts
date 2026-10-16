@@ -278,7 +278,7 @@ export class Webview2Window {
       throw new Error(
         `bun-webview2: port ${opts.port} requested, but this app already drives its WebView2 browser on ${activePort}. All windows share one port.`,
       );
-    } else if (opts.dataDir !== undefined && opts.dataDir !== activeDataDir) {
+    } else if (opts.dataDir !== undefined && resolve(opts.dataDir) !== activeDataDir) {
       throw new Error(
         `bun-webview2: dataDir ${opts.dataDir} requested, but this app already uses ${activeDataDir}. All windows share one data folder.`,
       );
